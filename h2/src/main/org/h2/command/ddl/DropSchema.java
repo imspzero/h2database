@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,7 +10,7 @@ import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.constraint.ConstraintActionType;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
 import org.h2.schema.SchemaObject;
@@ -25,7 +25,7 @@ public class DropSchema extends DefineCommand {
     private boolean ifExists;
     private ConstraintActionType dropAction;
 
-    public DropSchema(Session session) {
+    public DropSchema(SessionLocal session) {
         super(session);
         dropAction = session.getDatabase().getSettings().dropRestrict ?
                 ConstraintActionType.RESTRICT : ConstraintActionType.CASCADE;
@@ -36,9 +36,7 @@ public class DropSchema extends DefineCommand {
     }
 
     @Override
-    public int update() {
-        session.getUser().checkSchemaAdmin();
-        session.commit(true);
+    public long update() {
         Database db = session.getDatabase();
         Schema schema = db.findSchema(schemaName);
         if (schema == null) {
@@ -46,6 +44,7 @@ public class DropSchema extends DefineCommand {
                 throw DbException.get(ErrorCode.SCHEMA_NOT_FOUND_1, schemaName);
             }
         } else {
+            session.getUser().checkSchemaOwner(schema);
             if (!schema.canDrop()) {
                 throw DbException.get(ErrorCode.SCHEMA_CAN_NOT_BE_DROPPED_1, schemaName);
             }

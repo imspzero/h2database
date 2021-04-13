@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,7 +8,7 @@ package org.h2.command.ddl;
 import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
 import org.h2.table.TableLink;
@@ -28,8 +28,9 @@ public class CreateLinkedTable extends SchemaCommand {
     private boolean temporary;
     private boolean globalTemporary;
     private boolean readOnly;
+    private int fetchSize;
 
-    public CreateLinkedTable(Session session, Schema schema) {
+    public CreateLinkedTable(SessionLocal session, Schema schema) {
         super(session, schema);
     }
 
@@ -61,11 +62,19 @@ public class CreateLinkedTable extends SchemaCommand {
         this.ifNotExists = ifNotExists;
     }
 
+    /**
+     * Specify the number of rows fetched by the linked table command
+     *
+     * @param fetchSize
+     */
+    public void setFetchSize(int fetchSize) {
+        this.fetchSize = fetchSize;
+    }
+
     @Override
-    public int update() {
-        session.commit(true);
-        Database db = session.getDatabase();
+    public long update() {
         session.getUser().checkAdmin();
+        Database db = session.getDatabase();
         if (getSchema().resolveTableOrView(session, tableName) != null) {
             if (ifNotExists) {
                 return 0;
@@ -80,6 +89,9 @@ public class CreateLinkedTable extends SchemaCommand {
         table.setGlobalTemporary(globalTemporary);
         table.setComment(comment);
         table.setReadOnly(readOnly);
+        if (fetchSize > 0) {
+            table.setFetchSize(fetchSize);
+        }
         if (temporary && !globalTemporary) {
             session.addLocalTempTable(table);
         } else {

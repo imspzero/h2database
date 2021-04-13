@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,21 +7,19 @@ package org.h2.table;
 
 import java.util.ArrayList;
 import org.h2.api.ErrorCode;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.index.Index;
-import org.h2.index.IndexType;
 import org.h2.index.RangeIndex;
 import org.h2.message.DbException;
-import org.h2.result.Row;
 import org.h2.schema.Schema;
-import org.h2.value.Value;
+import org.h2.value.TypeInfo;
 
 /**
  * The table SYSTEM_RANGE is a virtual table that generates incrementing numbers
  * with a given start end point.
  */
-public class RangeTable extends Table {
+public class RangeTable extends VirtualTable {
 
     /**
      * The name of the range table.
@@ -36,112 +34,47 @@ public class RangeTable extends Table {
     private Expression min, max, step;
     private boolean optimized;
 
+    private final RangeIndex index;
+
     /**
      * Create a new range with the given start and end expressions.
      *
      * @param schema the schema (always the main schema)
      * @param min the start expression
      * @param max the end expression
-     * @param noColumns whether this table has no columns
      */
-    public RangeTable(Schema schema, Expression min, Expression max,
-            boolean noColumns) {
-        super(schema, 0, NAME, true, true);
-        Column[] cols = noColumns ? new Column[0] : new Column[] { new Column(
-                "X", Value.LONG) };
+    public RangeTable(Schema schema, Expression min, Expression max) {
+        super(schema, 0, NAME);
         this.min = min;
         this.max = max;
-        setColumns(cols);
+        Column[] columns = new Column[] { new Column("X", TypeInfo.TYPE_BIGINT) };
+        setColumns(columns);
+        index = new RangeIndex(this, IndexColumn.wrap(columns));
     }
 
-    public RangeTable(Schema schema, Expression min, Expression max,
-            Expression step, boolean noColumns) {
-        this(schema, min, max, noColumns);
+    public RangeTable(Schema schema, Expression min, Expression max, Expression step) {
+        this(schema, min, max);
         this.step = step;
     }
 
     @Override
-    public String getDropSQL() {
-        return null;
-    }
-
-    @Override
-    public String getCreateSQL() {
-        return null;
-    }
-
-    @Override
-    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
+    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
         builder.append(NAME).append('(');
-        min.getSQL(builder, alwaysQuote).append(", ");
-        max.getSQL(builder, alwaysQuote);
+        min.getUnenclosedSQL(builder, sqlFlags).append(", ");
+        max.getUnenclosedSQL(builder, sqlFlags);
         if (step != null) {
-            builder.append(", ");
-            step.getSQL(builder, alwaysQuote);
+            step.getUnenclosedSQL(builder.append(", "), sqlFlags);
         }
         return builder.append(')');
     }
 
     @Override
-    public boolean lock(Session session, boolean exclusive, boolean forceLockEvenInMvcc) {
-        // nothing to do
-        return false;
-    }
-
-    @Override
-    public void close(Session session) {
-        // nothing to do
-    }
-
-    @Override
-    public void unlock(Session s) {
-        // nothing to do
-    }
-
-    @Override
-    public boolean isLockedExclusively() {
-        return false;
-    }
-
-    @Override
-    public Index addIndex(Session session, String indexName,
-            int indexId, IndexColumn[] cols, IndexType indexType,
-            boolean create, String indexComment) {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
-    public void removeRow(Session session, Row row) {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
-    public void addRow(Session session, Row row) {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
-    public void checkSupportAlter() {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
-    public void checkRename() {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
-    public boolean canGetRowCount() {
+    public boolean canGetRowCount(SessionLocal session) {
         return true;
     }
 
     @Override
-    public boolean canDrop() {
-        return false;
-    }
-
-    @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         long step = getStep(session);
         if (step == 0L) {
             throw DbException.get(ErrorCode.STEP_SIZE_MUST_NOT_BE_ZERO);
@@ -163,11 +96,18 @@ public class RangeTable extends Table {
     }
 
     @Override
-    public Index getScanIndex(Session session) {
-        if (getStep(session) == 0) {
-            throw DbException.get(ErrorCode.STEP_SIZE_MUST_NOT_BE_ZERO);
-        }
-        return new RangeIndex(this, IndexColumn.wrap(columns));
+    public Index getScanIndex(SessionLocal session) {
+        return index;
+    }
+
+    @Override
+    public ArrayList<Index> getIndexes() {
+        ArrayList<Index> list = new ArrayList<>(2);
+        // Scan index (ignored by MIN/MAX optimization)
+        list.add(index);
+        // Normal index
+        list.add(index);
+        return list;
     }
 
     /**
@@ -176,7 +116,7 @@ public class RangeTable extends Table {
      * @param session the session
      * @return the start value
      */
-    public long getMin(Session session) {
+    public long getMin(SessionLocal session) {
         optimize(session);
         return min.getValue(session).getLong();
     }
@@ -187,7 +127,7 @@ public class RangeTable extends Table {
      * @param session the session
      * @return the end value
      */
-    public long getMax(Session session) {
+    public long getMax(SessionLocal session) {
         optimize(session);
         return max.getValue(session).getLong();
     }
@@ -198,7 +138,7 @@ public class RangeTable extends Table {
      * @param session the session
      * @return the increment (1 by default)
      */
-    public long getStep(Session session) {
+    public long getStep(SessionLocal session) {
         optimize(session);
         if (step == null) {
             return 1;
@@ -206,7 +146,7 @@ public class RangeTable extends Table {
         return step.getValue(session).getLong();
     }
 
-    private void optimize(Session s) {
+    private void optimize(SessionLocal s) {
         if (!optimized) {
             min = min.optimize(s);
             max = max.optimize(s);
@@ -218,43 +158,18 @@ public class RangeTable extends Table {
     }
 
     @Override
-    public ArrayList<Index> getIndexes() {
-        return null;
-    }
-
-    @Override
-    public void truncate(Session session) {
-        throw DbException.getUnsupportedException("SYSTEM_RANGE");
-    }
-
-    @Override
     public long getMaxDataModificationId() {
         return 0;
     }
 
     @Override
-    public Index getUniqueIndex() {
-        return null;
-    }
-
-    @Override
-    public long getRowCountApproximation() {
+    public long getRowCountApproximation(SessionLocal session) {
         return 100;
-    }
-
-    @Override
-    public long getDiskSpaceUsed() {
-        return 0;
     }
 
     @Override
     public boolean isDeterministic() {
         return true;
-    }
-
-    @Override
-    public boolean canReference() {
-        return false;
     }
 
 }

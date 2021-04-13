@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -12,11 +12,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.h2.util.SoftHashMap;
+import org.h2.util.SoftValuesHashMap;
 
 /**
  * The global settings of a full text search.
@@ -26,7 +25,7 @@ final class FullTextSettings {
     /**
      * The settings of open indexes.
      */
-    private static final Map<String, FullTextSettings> SETTINGS = new HashMap<>();
+    private static final HashMap<String, FullTextSettings> SETTINGS = new HashMap<>();
 
     /**
      * Whether this instance has been initialized.
@@ -36,12 +35,12 @@ final class FullTextSettings {
     /**
      * The set of words not to index (stop words).
      */
-    private final Set<String> ignoreList = new HashSet<>();
+    private final HashSet<String> ignoreList = new HashSet<>();
 
     /**
      * The set of words / terms.
      */
-    private final Map<String, Integer> words = new HashMap<>();
+    private final HashMap<String, Integer> words = new HashMap<>();
 
     /**
      * The set of indexes in this database.
@@ -51,9 +50,7 @@ final class FullTextSettings {
     /**
      * The prepared statement cache.
      */
-    private final SoftHashMap<Connection,
-            SoftHashMap<String, PreparedStatement>> cache =
-            new SoftHashMap<>();
+    private final WeakHashMap<Connection, SoftValuesHashMap<String, PreparedStatement>> cache = new WeakHashMap<>();
 
     /**
      * The whitespace characters.
@@ -116,9 +113,7 @@ final class FullTextSettings {
      */
     public void addWord(String word, Integer id) {
         synchronized (words) {
-            if(!words.containsKey(word)) {
-                words.put(word, id);
-            }
+            words.putIfAbsent(word, id);
         }
     }
 
@@ -187,7 +182,7 @@ final class FullTextSettings {
     private static String getIndexPath(Connection conn) throws SQLException {
         Statement stat = conn.createStatement();
         ResultSet rs = stat.executeQuery(
-                "CALL IFNULL(DATABASE_PATH(), 'MEM:' || DATABASE())");
+                "CALL COALESCE(DATABASE_PATH(), 'MEM:' || DATABASE())");
         rs.next();
         String path = rs.getString(1);
         if ("MEM:UNNAMED".equals(path)) {
@@ -208,9 +203,9 @@ final class FullTextSettings {
      */
     protected synchronized PreparedStatement prepare(Connection conn, String sql)
             throws SQLException {
-        SoftHashMap<String, PreparedStatement> c = cache.get(conn);
+        SoftValuesHashMap<String, PreparedStatement> c = cache.get(conn);
         if (c == null) {
-            c = new SoftHashMap<>();
+            c = new SoftValuesHashMap<>();
             cache.put(conn, c);
         }
         PreparedStatement prep = c.get(sql);

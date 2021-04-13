@@ -1,15 +1,14 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.pagestore.db;
 
 import org.h2.api.ErrorCode;
-import org.h2.command.dml.AllColumnsForPlan;
+import org.h2.command.query.AllColumnsForPlan;
 import org.h2.engine.Constants;
-import org.h2.engine.Session;
-import org.h2.engine.SysProperties;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Cursor;
 import org.h2.index.IndexType;
 import org.h2.message.DbException;
@@ -41,10 +40,9 @@ public class PageBtreeIndex extends PageIndex {
     private int memoryPerPage;
     private int memoryCount;
 
-    public PageBtreeIndex(PageStoreTable table, int id, String indexName,
-            IndexColumn[] columns,
-            IndexType indexType, boolean create, Session session) {
-        super(table, id, indexName, columns, indexType);
+    public PageBtreeIndex(PageStoreTable table, int id, String indexName, IndexColumn[] columns, int uniqueColumnCount,
+            IndexType indexType, boolean create, SessionLocal session) {
+        super(table, id, indexName, columns, uniqueColumnCount, indexType);
         if (!database.isStarting() && create) {
             checkIndexColumnTypes(columns);
         }
@@ -52,10 +50,11 @@ public class PageBtreeIndex extends PageIndex {
         // trace.setLevel(TraceSystem.DEBUG);
         tableData = table;
         if (!database.isPersistent() || id < 0) {
-            throw DbException.throwInternalError(indexName);
+            throw DbException.getInternalError(indexName);
         }
         this.store = database.getPageStore();
         store.addIndex(this);
+        boolean needRebuild = false;
         if (create) {
             // new index
             rootPageId = store.allocatePage();
@@ -66,20 +65,24 @@ public class PageBtreeIndex extends PageIndex {
             PageBtreeLeaf root = PageBtreeLeaf.create(this, rootPageId, PageBtree.ROOT);
             store.logUndo(root, null);
             store.update(root);
+            needRebuild = true;
         } else {
             rootPageId = store.getRootPageId(id);
             PageBtree root = getPage(rootPageId);
             rowCount = root.getRowCount();
+            if (rowCount == 0 && store.isRecoveryRunning()) {
+                needRebuild = true;
+            }
         }
-        this.needRebuild = create || (rowCount == 0 && store.isRecoveryRunning());
+        this.needRebuild = needRebuild;
         if (trace.isDebugEnabled()) {
             trace.debug("opened {0} rows: {1}", getName() , rowCount);
         }
-        memoryPerPage = (Constants.MEMORY_PAGE_BTREE + store.getPageSize()) >> 2;
+        memoryPerPage = (PageBtree.MEMORY_PAGE_BTREE + store.getPageSize()) >> 2;
     }
 
     @Override
-    public void add(Session session, Row row) {
+    public void add(SessionLocal session, Row row) {
         if (trace.isDebugEnabled()) {
             trace.debug("{0} add {1}", getName(), row);
         }
@@ -132,7 +135,7 @@ public class PageBtreeIndex extends PageIndex {
      */
     private SearchRow getSearchRow(Row row) {
         SearchRow r = table.getTemplateSimpleRow(columns.length == 1);
-        r.setKey(row);
+        r.setKey(row.getKey());
         for (Column c : columns) {
             int idx = c.getColumnId();
             r.setValue(idx, row.getValue(idx));
@@ -166,16 +169,16 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public Cursor findNext(Session session, SearchRow first, SearchRow last) {
+    public Cursor findNext(SessionLocal session, SearchRow first, SearchRow last) {
         return find(session, first, true, last);
     }
 
     @Override
-    public Cursor find(Session session, SearchRow first, SearchRow last) {
+    public Cursor find(SessionLocal session, SearchRow first, SearchRow last) {
         return find(session, first, false, last);
     }
 
-    private Cursor find(Session session, SearchRow first, boolean bigger,
+    private Cursor find(SessionLocal session, SearchRow first, boolean bigger,
             SearchRow last) {
         if (store == null) {
             throw DbException.get(ErrorCode.OBJECT_CLOSED);
@@ -187,7 +190,7 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public Cursor findFirstOrLast(Session session, boolean first) {
+    public Cursor findFirstOrLast(SessionLocal session, boolean first) {
         if (first) {
             // TODO optimization: this loops through NULL elements
             Cursor cursor = find(session, null, false, null);
@@ -219,7 +222,7 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public double getCost(Session session, int[] masks,
+    public double getCost(SessionLocal session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
         return 10 * getCostRangeIndex(masks, tableData.getRowCount(session),
@@ -232,7 +235,7 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public void remove(Session session, Row row) {
+    public void remove(SessionLocal session, Row row) {
         if (trace.isDebugEnabled()) {
             trace.debug("{0} remove {1}", getName(), row);
         }
@@ -253,7 +256,7 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public void remove(Session session) {
+    public void remove(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("remove");
         }
@@ -263,7 +266,7 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public void truncate(Session session) {
+    public void truncate(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("truncate");
         }
@@ -287,11 +290,6 @@ public class PageBtreeIndex extends PageIndex {
         }
     }
 
-    @Override
-    public void checkRename() {
-        // ok
-    }
-
     /**
      * Get a row from the main index.
      *
@@ -300,7 +298,7 @@ public class PageBtreeIndex extends PageIndex {
      * @return the row
      */
     @Override
-    public Row getRow(Session session, long key) {
+    public Row getRow(SessionLocal session, long key) {
         return tableData.getRow(session, key);
     }
 
@@ -309,8 +307,8 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public long getRowCountApproximation() {
-        return tableData.getRowCountApproximation();
+    public long getRowCountApproximation(SessionLocal session) {
+        return tableData.getRowCountApproximation(session);
     }
 
     @Override
@@ -319,12 +317,12 @@ public class PageBtreeIndex extends PageIndex {
     }
 
     @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         return rowCount;
     }
 
     @Override
-    public void close(Session session) {
+    public void close(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("close");
         }
@@ -363,7 +361,7 @@ public class PageBtreeIndex extends PageIndex {
             row.setKey(key);
             for (Column col : columns) {
                 int idx = col.getColumnId();
-                row.setValue(idx, data.readValue());
+                row.setValue(idx, data.readValue(col.getType()));
             }
             return row;
         }
@@ -401,17 +399,15 @@ public class PageBtreeIndex extends PageIndex {
     /**
      * Get the size of a row (only the part that is stored in the index).
      *
-     * @param dummy a dummy data page to calculate the size
      * @param row the row
      * @param onlyPosition whether only the position of the row is stored
      * @return the number of bytes
      */
-    int getRowSize(Data dummy, SearchRow row, boolean onlyPosition) {
+    int getRowSize(SearchRow row, boolean onlyPosition) {
         int rowsize = Data.getVarLongLen(row.getKey());
         if (!onlyPosition) {
             for (Column col : columns) {
-                Value v = row.getValue(col.getColumnId());
-                rowsize += dummy.getValueLen(v);
+                rowsize += Data.getValueLen(row.getValue(col.getColumnId()));
             }
         }
         return rowsize;
@@ -428,7 +424,7 @@ public class PageBtreeIndex extends PageIndex {
      * @param session the session
      * @param newPos the new position
      */
-    void setRootPageId(Session session, int newPos) {
+    void setRootPageId(SessionLocal session, int newPos) {
         store.removeMeta(this, session);
         this.rootPageId = newPos;
         store.addMeta(this, session);
@@ -442,10 +438,6 @@ public class PageBtreeIndex extends PageIndex {
 
     @Override
     public void writeRowCount() {
-        if (SysProperties.MODIFY_ON_WRITE && rootPageId == 0) {
-            // currently creating the index
-            return;
-        }
         PageBtree root = getPage(rootPageId);
         root.setRowCountStored(MathUtils.convertLongToInt(rowCount));
     }

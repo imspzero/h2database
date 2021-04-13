@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,8 +7,7 @@ package org.h2.expression.condition;
 
 import java.util.AbstractList;
 
-import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ExpressionColumn;
 import org.h2.expression.ExpressionVisitor;
@@ -16,7 +15,6 @@ import org.h2.expression.Parameter;
 import org.h2.expression.TypedValueExpression;
 import org.h2.expression.ValueExpression;
 import org.h2.index.IndexCondition;
-import org.h2.result.ResultInterface;
 import org.h2.table.ColumnResolver;
 import org.h2.table.TableFilter;
 import org.h2.value.Value;
@@ -27,7 +25,7 @@ import org.h2.value.ValueNull;
 /**
  * A condition with parameter as {@code = ANY(?)}.
  */
-public class ConditionInParameter extends Condition {
+public final class ConditionInParameter extends Condition {
     private static final class ParameterList extends AbstractList<Expression> {
         private final Parameter parameter;
 
@@ -60,73 +58,83 @@ public class ConditionInParameter extends Condition {
         }
     }
 
-    private final Database database;
-
     private Expression left;
+
+    private boolean not;
+
+    private boolean whenOperand;
 
     private final Parameter parameter;
 
     /**
      * Gets evaluated condition value.
      *
-     * @param database database instance.
+     * @param session the session
      * @param l left value.
+     * @param not whether the result should be negated
      * @param value parameter value.
      * @return Evaluated condition value.
      */
-    static Value getValue(Database database, Value l, Value value) {
+    static Value getValue(SessionLocal session, Value l, boolean not, Value value) {
         boolean hasNull = false;
         if (value.containsNull()) {
             hasNull = true;
-        } else if (value.getValueType() == Value.RESULT_SET) {
-            for (ResultInterface ri = value.getResult(); ri.next();) {
-                Value r = ri.currentRow()[0];
-                Value cmp = Comparison.compare(database, l, r, Comparison.EQUAL);
-                if (cmp == ValueNull.INSTANCE) {
-                    hasNull = true;
-                } else if (cmp == ValueBoolean.TRUE) {
-                    return cmp;
-                }
-            }
         } else {
-            for (Value r : ((ValueArray) value.convertTo(Value.ARRAY)).getList()) {
-                Value cmp = Comparison.compare(database, l, r, Comparison.EQUAL);
+            for (Value r : value.convertToAnyArray(session).getList()) {
+                Value cmp = Comparison.compare(session, l, r, Comparison.EQUAL);
                 if (cmp == ValueNull.INSTANCE) {
                     hasNull = true;
                 } else if (cmp == ValueBoolean.TRUE) {
-                    return cmp;
+                    return ValueBoolean.get(!not);
                 }
             }
         }
         if (hasNull) {
             return ValueNull.INSTANCE;
         }
-        return ValueBoolean.FALSE;
+        return ValueBoolean.get(not);
     }
 
     /**
      * Create a new {@code = ANY(?)} condition.
      *
-     * @param database
-     *            the database
      * @param left
      *            the expression before {@code = ANY(?)}
+     * @param not whether the result should be negated
+     * @param whenOperand whether this is a when operand
      * @param parameter
      *            parameter
      */
-    public ConditionInParameter(Database database, Expression left, Parameter parameter) {
-        this.database = database;
+    public ConditionInParameter(Expression left, boolean not, boolean whenOperand, Parameter parameter) {
         this.left = left;
+        this.not = not;
+        this.whenOperand = whenOperand;
         this.parameter = parameter;
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         Value l = left.getValue(session);
         if (l == ValueNull.INSTANCE) {
-            return l;
+            return ValueNull.INSTANCE;
         }
-        return getValue(database, l, parameter.getValue(session));
+        return getValue(session, l, not, parameter.getValue(session));
+    }
+
+    @Override
+    public boolean getWhenValue(SessionLocal session, Value left) {
+        if (!whenOperand) {
+            return super.getWhenValue(session, left);
+        }
+        if (left == ValueNull.INSTANCE) {
+            return false;
+        }
+        return getValue(session, left, not, parameter.getValue(session)).isTrue();
+    }
+
+    @Override
+    public boolean isWhenConditionOperand() {
+        return whenOperand;
     }
 
     @Override
@@ -135,17 +143,25 @@ public class ConditionInParameter extends Condition {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         left = left.optimize(session);
-        if (left.isNullConstant()) {
-            return TypedValueExpression.getUnknown();
+        if (!whenOperand && left.isNullConstant()) {
+            return TypedValueExpression.UNKNOWN;
         }
         return this;
     }
 
     @Override
-    public void createIndexConditions(Session session, TableFilter filter) {
-        if (!(left instanceof ExpressionColumn)) {
+    public Expression getNotIfPossible(SessionLocal session) {
+        if (whenOperand) {
+            return null;
+        }
+        return new ConditionInParameter(left, !not, false, parameter);
+    }
+
+    @Override
+    public void createIndexConditions(SessionLocal session, TableFilter filter) {
+        if (not || whenOperand || !(left instanceof ExpressionColumn)) {
             return;
         }
         ExpressionColumn l = (ExpressionColumn) left;
@@ -161,14 +177,37 @@ public class ConditionInParameter extends Condition {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
-        builder.append('(');
-        left.getSQL(builder, alwaysQuote).append(" = ANY(");
-        return parameter.getSQL(builder, alwaysQuote).append("))");
+    public boolean needParentheses() {
+        return true;
     }
 
     @Override
-    public void updateAggregate(Session session, int stage) {
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        if (not) {
+            builder.append("NOT (");
+        }
+        left.getSQL(builder, sqlFlags, AUTO_PARENTHESES);
+        parameter.getSQL(builder.append(" = ANY("), sqlFlags, AUTO_PARENTHESES).append(')');
+        if (not) {
+            builder.append(')');
+        }
+        return builder;
+    }
+
+    @Override
+    public StringBuilder getWhenSQL(StringBuilder builder, int sqlFlags) {
+        if (not) {
+            builder.append(" NOT IN(UNNEST(");
+            parameter.getSQL(builder, sqlFlags, AUTO_PARENTHESES).append("))");
+        } else {
+            builder.append(" = ANY(");
+            parameter.getSQL(builder, sqlFlags, AUTO_PARENTHESES).append(')');
+        }
+        return builder;
+    }
+
+    @Override
+    public void updateAggregate(SessionLocal session, int stage) {
         left.updateAggregate(session, stage);
     }
 

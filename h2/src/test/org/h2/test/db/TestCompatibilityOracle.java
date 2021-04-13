@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,6 +15,7 @@ import java.sql.Types;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Locale;
+
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
 import org.h2.tools.SimpleResultSet;
@@ -31,7 +32,7 @@ public class TestCompatibilityOracle extends TestDb {
      */
     public static void main(String... s) throws Exception {
         TestBase test = TestBase.createCaller().init();
-        test.test();
+        test.testFromMain();
     }
 
     @Override
@@ -41,9 +42,11 @@ public class TestCompatibilityOracle extends TestDb {
         testDecimalScale();
         testPoundSymbolInColumnName();
         testToDate();
-        testForbidEmptyInClause();
         testSpecialTypes();
         testDate();
+        testSequenceNextval();
+        testVarchar();
+        deleteDb("oracle");
     }
 
     private void testNotNullSyntax() throws SQLException {
@@ -158,7 +161,7 @@ public class TestCompatibilityOracle extends TestDb {
                 stat, "SELECT * FROM D");
 
         stat.execute("CREATE TABLE E (ID NUMBER, X RAW(1))");
-        stat.execute("INSERT INTO E VALUES (1, '0A')");
+        stat.execute("INSERT INTO E VALUES (1, HEXTORAW('0A'))");
         stat.execute("INSERT INTO E VALUES (2, '')");
         assertResult("2", stat, "SELECT COUNT(*) FROM E");
         assertResult("1", stat, "SELECT COUNT(*) FROM E WHERE X IS NULL");
@@ -215,7 +218,7 @@ public class TestCompatibilityOracle extends TestDb {
     }
 
     private void testToDate() throws SQLException {
-        if (Locale.getDefault() != Locale.ENGLISH) {
+        if (config.ci || Locale.getDefault() != Locale.ENGLISH) {
             return;
         }
         deleteDb("oracle");
@@ -234,22 +237,6 @@ public class TestCompatibilityOracle extends TestDb {
                 "SELECT TEST_VAL FROM DATE_TABLE WHERE ID=2");
 
         conn.close();
-    }
-
-    private void testForbidEmptyInClause() throws SQLException {
-        deleteDb("oracle");
-        Connection conn = getConnection("oracle;MODE=Oracle");
-        Statement stat = conn.createStatement();
-
-        stat.execute("CREATE TABLE A (ID NUMBER, X VARCHAR2(1))");
-        try {
-            stat.executeQuery("SELECT * FROM A WHERE ID IN ()");
-            fail();
-        } catch (SQLException e) {
-            // expected
-        } finally {
-            conn.close();
-        }
     }
 
     private void testDate() throws SQLException {
@@ -281,6 +268,86 @@ public class TestCompatibilityOracle extends TestDb {
         assertEquals(t4, rs.getTimestamp(1));
         assertFalse(rs.next());
 
+        conn.close();
+    }
+
+    private void testSequenceNextval() throws SQLException {
+        // Test NEXTVAL without Oracle MODE should return BIGINT
+        checkSequenceTypeWithMode("REGULAR", Types.BIGINT, false);
+        // Test NEXTVAL with Oracle MODE should return DECIMAL
+        checkSequenceTypeWithMode("Oracle", Types.NUMERIC, true);
+    }
+
+    private void checkSequenceTypeWithMode(String mode, int expectedType, boolean usePseudoColumn)
+            throws SQLException {
+        deleteDb("oracle");
+        Connection conn = getConnection("oracle;MODE=" + mode);
+        Statement stat = conn.createStatement();
+
+        stat.execute("CREATE SEQUENCE seq");
+        ResultSet rs = stat.executeQuery(
+                usePseudoColumn ? "SELECT seq.NEXTVAL FROM DUAL" : "VALUES NEXT VALUE FOR seq");
+        // Check type:
+        assertEquals(rs.getMetaData().getColumnType(1), expectedType);
+        conn.close();
+    }
+
+    private void testVarchar() throws SQLException {
+        deleteDb("oracle");
+        Connection conn = getConnection("oracle;MODE=Oracle");
+        Statement stat = conn.createStatement();
+        stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, V VARCHAR) AS VALUES (1, 'a')");
+        PreparedStatement prep = conn.prepareStatement("UPDATE TEST SET V = ? WHERE ID = ?");
+        prep.setInt(2, 1);
+        prep.setString(1, "");
+        prep.executeUpdate();
+        ResultSet rs = stat.executeQuery("SELECT V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(1));
+        assertFalse(rs.next());
+        prep.setNString(1, "");
+        prep.executeUpdate();
+        Statement stat2 = conn.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE);
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateString(2, "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateString("V", "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateNString(2, "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateNString("V", "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateObject(2, "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat2.executeQuery("SELECT ID, V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(2));
+        rs.updateObject("V", "");
+        rs.updateRow();
+        assertFalse(rs.next());
+        rs = stat.executeQuery("SELECT V FROM TEST");
+        assertTrue(rs.next());
+        assertNull(rs.getString(1));
+        assertFalse(rs.next());
         conn.close();
     }
 

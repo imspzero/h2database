@@ -1,12 +1,12 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.pagestore;
 
 import java.lang.reflect.Array;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.util.CacheObject;
 
 /**
@@ -82,7 +82,7 @@ public abstract class Page extends CacheObject {
      * @param session the session
      * @param newPos the new position
      */
-    public abstract void moveTo(Session session, int newPos);
+    public abstract void moveTo(SessionLocal session, int newPos);
 
     /**
      * Write the page.

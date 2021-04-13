@@ -1,24 +1,25 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.command;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
 import org.h2.engine.Database;
-import org.h2.engine.Session;
+import org.h2.engine.DbObject;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.Parameter;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
 import org.h2.result.ResultInterface;
 import org.h2.table.TableView;
-import org.h2.util.MathUtils;
-import org.h2.value.Value;
+import org.h2.util.HasSQL;
 
 /**
  * A prepared statement.
@@ -28,7 +29,7 @@ public abstract class Prepared {
     /**
      * The session.
      */
-    protected Session session;
+    protected SessionLocal session;
 
     /**
      * The SQL string.
@@ -73,7 +74,7 @@ public abstract class Prepared {
      *
      * @param session the session
      */
-    public Prepared(Session session) {
+    public Prepared(SessionLocal session) {
         this.session = session;
         modificationMetaId = session.getDatabase().getModificationMetaId();
     }
@@ -173,7 +174,7 @@ public abstract class Prepared {
         if (persistedObjectId < 0) {
             // restore original persistedObjectId on Command re-run
             // i.e. due to concurrent update
-            persistedObjectId = -persistedObjectId - 1;
+            persistedObjectId = ~persistedObjectId;
         }
         if (parameters != null) {
             for (Parameter param : parameters) {
@@ -213,7 +214,7 @@ public abstract class Prepared {
      * @return the update count
      * @throws DbException if it is a query
      */
-    public int update() {
+    public long update() {
         throw DbException.get(ErrorCode.METHOD_NOT_ALLOWED_FOR_QUERY);
     }
 
@@ -225,7 +226,7 @@ public abstract class Prepared {
      * @throws DbException if it is not a query
      */
     @SuppressWarnings("unused")
-    public ResultInterface query(int maxrows) {
+    public ResultInterface query(long maxrows) {
         throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
     }
 
@@ -254,7 +255,7 @@ public abstract class Prepared {
      *
      * @return the object id or 0 if not set
      */
-    protected int getPersistedObjectId() {
+    public int getPersistedObjectId() {
         int id = persistedObjectId;
         return id >= 0 ? id : 0;
     }
@@ -271,19 +272,19 @@ public abstract class Prepared {
         if (id == 0) {
             id = session.getDatabase().allocateObjectId();
         } else if (id < 0) {
-            throw DbException.throwInternalError("Prepared.getObjectId() was called before");
+            throw DbException.getInternalError("Prepared.getObjectId() was called before");
         }
-        persistedObjectId = -persistedObjectId - 1;  // while negative, it can be restored later
+        persistedObjectId = ~persistedObjectId;  // while negative, it can be restored later
         return id;
     }
 
     /**
      * Get the SQL statement with the execution plan.
      *
-     * @param alwaysQuote quote all identifiers
+     * @param sqlFlags formatting flags
      * @return the execution plan
      */
-    public String getPlanSQL(boolean alwaysQuote) {
+    public String getPlanSQL(int sqlFlags) {
         return null;
     }
 
@@ -315,7 +316,7 @@ public abstract class Prepared {
      *
      * @param currentSession the new session
      */
-    public void setSession(Session currentSession) {
+    public void setSession(SessionLocal currentSession) {
         this.session = currentSession;
     }
 
@@ -326,19 +327,17 @@ public abstract class Prepared {
      * @param startTimeNanos when the statement was started
      * @param rowCount the query or update row count
      */
-    void trace(long startTimeNanos, int rowCount) {
+    void trace(long startTimeNanos, long rowCount) {
         if (session.getTrace().isInfoEnabled() && startTimeNanos > 0) {
             long deltaTimeNanos = System.nanoTime() - startTimeNanos;
             String params = Trace.formatParams(parameters);
-            session.getTrace().infoSQL(sqlStatement, params, rowCount,
-                    deltaTimeNanos / 1000 / 1000);
+            session.getTrace().infoSQL(sqlStatement, params, rowCount, deltaTimeNanos / 1_000_000L);
         }
         // startTime_nanos can be zero for the command that actually turns on
         // statistics
         if (session.getDatabase().getQueryStatistics() && startTimeNanos != 0) {
             long deltaTimeNanos = System.nanoTime() - startTimeNanos;
-            session.getDatabase().getQueryStatisticsData().
-                    update(toString(), deltaTimeNanos, rowCount);
+            session.getDatabase().getQueryStatisticsData().update(toString(), deltaTimeNanos, rowCount);
         }
     }
 
@@ -379,11 +378,8 @@ public abstract class Prepared {
      */
     private void setProgress() {
         if ((currentRowNumber & 127) == 0) {
-            session.getDatabase().setProgress(
-                    DatabaseEventListener.STATE_STATEMENT_PROGRESS,
-                    sqlStatement,
-                    // TODO update interface
-                    MathUtils.convertLongToInt(currentRowNumber), 0);
+            session.getDatabase().setProgress(DatabaseEventListener.STATE_STATEMENT_PROGRESS, sqlStatement,
+                    currentRowNumber, 0L);
         }
     }
 
@@ -398,35 +394,13 @@ public abstract class Prepared {
     }
 
     /**
-     * Get the SQL snippet of the value list.
-     *
-     * @param values the value list
-     * @return the SQL snippet
-     */
-    protected static String getSQL(Value[] values) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0, l = values.length; i < l; i++) {
-            if (i > 0) {
-                builder.append(", ");
-            }
-            Value v = values[i];
-            if (v != null) {
-                v.getSQL(builder);
-            }
-        }
-        return builder.toString();
-    }
-
-    /**
      * Get the SQL snippet of the expression list.
      *
      * @param list the expression list
      * @return the SQL snippet
      */
-    protected static String getSimpleSQL(Expression[] list) {
-        StringBuilder builder = new StringBuilder();
-        Expression.writeExpressions(builder, list, false);
-        return builder.toString();
+    public static String getSimpleSQL(Expression[] list) {
+        return Expression.writeExpressions(new StringBuilder(), list, HasSQL.TRACE_SQL_FLAGS).toString();
     }
 
     /**
@@ -437,7 +411,7 @@ public abstract class Prepared {
      * @param values the values of the row
      * @return the exception
      */
-    protected DbException setRow(DbException e, int rowId, String values) {
+    protected DbException setRow(DbException e, long rowId, String values) {
         StringBuilder buff = new StringBuilder();
         if (sqlStatement != null) {
             buff.append(sqlStatement);
@@ -470,7 +444,14 @@ public abstract class Prepared {
         this.cteCleanups = cteCleanups;
     }
 
-    public Session getSession() {
+    public SessionLocal getSession() {
         return session;
     }
+
+    /**
+     * Find and collect all DbObjects, this Prepared depends on.
+     *
+     * @param dependencies collection of dependencies to populate
+     */
+    public void collectDependencies(HashSet<DbObject> dependencies) {}
 }

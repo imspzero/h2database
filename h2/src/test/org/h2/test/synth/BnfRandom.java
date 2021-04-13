@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -152,18 +152,7 @@ public class BnfRandom implements BnfVisitor {
     @Override
     public void visitRuleList(boolean or, ArrayList<Rule> list) {
         if (or) {
-            if (level > 10) {
-                if (level > 1000) {
-                    // better than stack overflow
-                    throw new AssertionError();
-                }
-                list.get(0).accept(this);
-                return;
-            }
-            int idx = random.nextInt(list.size());
-            level++;
-            list.get(idx).accept(this);
-            level--;
+            visitOr(list);
             return;
         }
         StringBuilder buff = new StringBuilder();
@@ -188,7 +177,38 @@ public class BnfRandom implements BnfVisitor {
     }
 
     @Override
+    public void visitRuleOptional(ArrayList<Rule> list) {
+        if (level > 10 ? random.nextInt(level) == 1 : random.nextInt(4) == 1) {
+            level++;
+            visitOr(list);
+            level--;
+            return;
+        }
+        sql = "";
+    }
+
+    private void visitOr(ArrayList<Rule> list) throws AssertionError {
+        if (level > 10) {
+            if (level > 1000) {
+                // better than stack overflow
+                throw new AssertionError();
+            }
+            list.get(0).accept(this);
+            return;
+        }
+        int idx = random.nextInt(list.size());
+        level++;
+        list.get(idx).accept(this);
+        level--;
+    }
+
+    @Override
     public void visitRuleRepeat(boolean comma, Rule rule) {
+        rule.accept(this);
+    }
+
+    @Override
+    public void visitRuleExtension(Rule rule, boolean compatibility) {
         rule.accept(this);
     }
 

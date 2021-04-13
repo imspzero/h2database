@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.pagestore.db;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Cursor;
 import org.h2.result.Row;
 import org.h2.result.SearchRow;
@@ -15,7 +15,7 @@ import org.h2.result.SearchRow;
  */
 public class PageBtreeCursor implements Cursor {
 
-    private final Session session;
+    private final SessionLocal session;
     private final PageBtreeIndex index;
     private final SearchRow last;
     private PageBtreeLeaf current;
@@ -23,7 +23,7 @@ public class PageBtreeCursor implements Cursor {
     private SearchRow currentSearchRow;
     private Row currentRow;
 
-    PageBtreeCursor(Session session, PageBtreeIndex index, SearchRow last) {
+    PageBtreeCursor(SessionLocal session, PageBtreeIndex index, SearchRow last) {
         this.session = session;
         this.index = index;
         this.last = last;

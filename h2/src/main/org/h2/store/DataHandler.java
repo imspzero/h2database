@@ -1,11 +1,10 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.store;
 
-import org.h2.api.JavaObjectSerializer;
 import org.h2.message.DbException;
 import org.h2.util.SmallLRUCache;
 import org.h2.util.TempFileDeleter;
@@ -103,17 +102,7 @@ public interface DataHandler {
      * @param length the number of bytes to read
      * @return the number of bytes read
      */
-    int readLob(long lobId, byte[] hmac, long offset, byte[] buff, int off,
-            int length);
-
-    /**
-     * Return the serializer to be used for java objects being stored in
-     * column of type OTHER.
-     *
-     * @return the serializer to be used for java objects being stored in
-     * column of type OTHER
-     */
-    JavaObjectSerializer getJavaObjectSerializer();
+    int readLob(long lobId, byte[] hmac, long offset, byte[] buff, int off, int length);
 
     /**
      * Return compare mode.

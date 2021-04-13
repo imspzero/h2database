@@ -1,11 +1,12 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: Sergi Vladykin
  */
 package org.h2.test.unit;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.HashSet;
@@ -20,6 +21,7 @@ import org.h2.engine.SysProperties;
 import org.h2.test.TestBase;
 import org.h2.util.NetUtils;
 import org.h2.util.Task;
+import org.h2.util.Utils10;
 
 /**
  * Test the network utilities from {@link NetUtils}.
@@ -41,7 +43,7 @@ public class TestNetUtils extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -50,6 +52,8 @@ public class TestNetUtils extends TestBase {
         testTlsSessionWithServerSideAnonymousDisabled();
         testFrequentConnections(true, 100);
         testFrequentConnections(false, 1000);
+        testIpToShortForm();
+        testTcpQuickack();
     }
 
     /**
@@ -58,7 +62,7 @@ public class TestNetUtils extends TestBase {
      * (no SSL certificate is needed).
      */
     private void testAnonymousTlsSession() throws Exception {
-        if (BuildBase.getJavaVersion() >= 11) {
+        if (config.ci || BuildBase.getJavaVersion() >= 11) {
             // Issue #1303
             return;
         }
@@ -102,6 +106,10 @@ public class TestNetUtils extends TestBase {
      * instead, the server socket is altered.
      */
     private void testTlsSessionWithServerSideAnonymousDisabled() throws Exception {
+        if (config.ci) {
+            // Issue #1303
+            return;
+        }
         boolean ssl = true;
         Task task = null;
         ServerSocket serverSocket = null;
@@ -265,6 +273,62 @@ public class TestNetUtils extends TestBase {
             return exception;
         }
 
+    }
+
+    private void testIpToShortForm() throws Exception {
+        testIpToShortForm("1.2.3.4", "1.2.3.4");
+        testIpToShortForm("1:2:3:4:a:b:c:d", "1:2:3:4:a:b:c:d");
+        testIpToShortForm("::1", "::1");
+        testIpToShortForm("1::", "1::");
+        testIpToShortForm("c1c1:0:0:2::fffe", "c1c1:0:0:2:0:0:0:fffe");
+    }
+
+    private void testIpToShortForm(String expected, String source) throws Exception {
+        byte[] addr = InetAddress.getByName(source).getAddress();
+        testIpToShortForm(expected, addr, false);
+        if (expected.indexOf(':') >= 0) {
+            expected = '[' + expected + ']';
+        }
+        testIpToShortForm(expected, addr, true);
+    }
+
+    private void testIpToShortForm(String expected, byte[] addr, boolean addBrackets) {
+        assertEquals(expected, NetUtils.ipToShortForm(null, addr, addBrackets).toString());
+        assertEquals(expected, NetUtils.ipToShortForm(new StringBuilder(), addr, addBrackets).toString());
+        assertEquals(expected,
+                NetUtils.ipToShortForm(new StringBuilder("*"), addr, addBrackets).deleteCharAt(0).toString());
+    }
+
+    private void testTcpQuickack() {
+        final boolean ssl = !config.ci && BuildBase.getJavaVersion() < 11;
+        try (ServerSocket serverSocket = NetUtils.createServerSocket(PORT, ssl)) {
+            Thread thread = new Thread() {
+                @Override
+                public void run() {
+                    try (Socket s = NetUtils.createLoopbackSocket(PORT, ssl)) {
+                        s.getInputStream().read();
+                    } catch (IOException e) {
+                    }
+                }
+            };
+            thread.start();
+            try (Socket socket = serverSocket.accept()) {
+                boolean supported = Utils10.setTcpQuickack(socket, true);
+                if (supported) {
+                    assertTrue(Utils10.getTcpQuickack(socket));
+                    Utils10.setTcpQuickack(socket, false);
+                    assertFalse(Utils10.getTcpQuickack(socket));
+                }
+                socket.getOutputStream().write(1);
+            } finally {
+                try {
+                    thread.join();
+                } catch (InterruptedException e) {
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -17,7 +17,7 @@ import org.h2.message.TraceSystem;
  * The writer thread is responsible to flush the transaction log
  * from time to time.
  */
-public class WriterThread implements Runnable {
+class WriterThread implements Runnable {
 
     /**
      * The reference to the database.
@@ -45,7 +45,7 @@ public class WriterThread implements Runnable {
      *
      * @param writeDelay the new write delay
      */
-    public void setWriteDelay(int writeDelay) {
+    void setWriteDelay(int writeDelay) {
         this.writeDelay = writeDelay;
     }
 
@@ -57,7 +57,7 @@ public class WriterThread implements Runnable {
      * @param writeDelay the delay
      * @return the writer thread object or null
      */
-    public static WriterThread create(Database database, int writeDelay) {
+    static WriterThread create(Database database, int writeDelay) {
         try {
             WriterThread writer = new WriterThread(database, writeDelay);
             writer.thread = new Thread(writer, "H2 Log Writer " + database.getShortName());
@@ -79,12 +79,7 @@ public class WriterThread implements Runnable {
             }
             int wait = writeDelay;
             try {
-                if (database.isFileLockSerialized()) {
-                    wait = Constants.MIN_WRITE_DELAY;
-                    database.checkpointIfRequired();
-                } else {
-                    database.flush();
-                }
+                database.flush();
             } catch (Exception e) {
                 TraceSystem traceSystem = database.getTraceSystem();
                 if (traceSystem != null) {
@@ -113,7 +108,7 @@ public class WriterThread implements Runnable {
     /**
      * Stop the thread. This method is called when closing the database.
      */
-    public void stopThread() {
+    void stopThread() {
         stop = true;
         synchronized (this) {
             notify();
@@ -126,7 +121,7 @@ public class WriterThread implements Runnable {
      * Start the thread. This method is called after opening the database
      * (to avoid deadlocks)
      */
-    public void startThread() {
+    void startThread() {
         thread.start();
         thread = null;
     }

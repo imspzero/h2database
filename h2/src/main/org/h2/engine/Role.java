@@ -1,18 +1,21 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.engine;
 
+import java.util.ArrayList;
+
 import org.h2.message.DbException;
 import org.h2.message.Trace;
+import org.h2.schema.Schema;
 import org.h2.table.Table;
 
 /**
  * Represents a role. Roles can be granted to users, and to other roles.
  */
-public class Role extends RightOwner {
+public final class Role extends RightOwner {
 
     private final boolean system;
 
@@ -23,12 +26,7 @@ public class Role extends RightOwner {
 
     @Override
     public String getCreateSQLForCopy(Table table, String quotedName) {
-        throw DbException.throwInternalError(toString());
-    }
-
-    @Override
-    public String getDropSQL() {
-        return null;
+        throw DbException.getInternalError(toString());
     }
 
     /**
@@ -41,12 +39,11 @@ public class Role extends RightOwner {
         if (system) {
             return null;
         }
-        StringBuilder buff = new StringBuilder("CREATE ROLE ");
+        StringBuilder builder = new StringBuilder("CREATE ROLE ");
         if (ifNotExists) {
-            buff.append("IF NOT EXISTS ");
+            builder.append("IF NOT EXISTS ");
         }
-        getSQL(buff, true);
-        return buff.toString();
+        return getSQL(builder, DEFAULT_SQL_FLAGS).toString();
     }
 
     @Override
@@ -60,15 +57,20 @@ public class Role extends RightOwner {
     }
 
     @Override
-    public void removeChildrenAndResources(Session session) {
-        for (User user : database.getAllUsers()) {
-            Right right = user.getRightForRole(this);
-            if (right != null) {
-                database.removeDatabaseObject(session, right);
+    public ArrayList<DbObject> getChildren() {
+        ArrayList<DbObject> children = new ArrayList<>();
+        for (Schema schema : database.getAllSchemas()) {
+            if (schema.getOwner() == this) {
+                children.add(schema);
             }
         }
-        for (Role r2 : database.getAllRoles()) {
-            Right right = r2.getRightForRole(this);
+        return children;
+    }
+
+    @Override
+    public void removeChildrenAndResources(SessionLocal session) {
+        for (RightOwner rightOwner : database.getAllUsersAndRoles()) {
+            Right right = rightOwner.getRightForRole(this);
             if (right != null) {
                 database.removeDatabaseObject(session, right);
             }
@@ -80,11 +82,6 @@ public class Role extends RightOwner {
         }
         database.removeMeta(session, getId());
         invalidate();
-    }
-
-    @Override
-    public void checkRename() {
-        // ok
     }
 
 }

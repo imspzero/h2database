@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -22,6 +22,7 @@ import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
 import org.h2.util.IOUtils;
 import org.h2.util.NetUtils;
+import org.h2.util.NetworkConnectionInfo;
 import org.h2.util.StringUtils;
 import org.h2.util.Utils;
 
@@ -135,8 +136,12 @@ class WebThread extends WebApp implements Runnable {
                 session = server.getSession(sessionId);
             }
             keepAlive = parseHeader();
-            String hostAddr = socket.getInetAddress().getHostAddress();
-            file = processRequest(file, hostAddr);
+            file = processRequest(file,
+                    new NetworkConnectionInfo(
+                            NetUtils.ipToShortForm(new StringBuilder(server.getSSL() ? "https://" : "http://"),
+                                    socket.getLocalAddress().getAddress(), true) //
+                                    .append(':').append(socket.getLocalPort()).toString(), //
+                            socket.getInetAddress().getAddress(), socket.getPort(), null));
             if (file.length() == 0) {
                 // asynchronous request
                 return true;
@@ -286,7 +291,7 @@ class WebThread extends WebApp implements Runnable {
                 boolean isWebKit = lower.contains("webkit/");
                 if (isWebKit && session != null) {
                     // workaround for what seems to be a WebKit bug:
-                    // http://code.google.com/p/chromium/issues/detail?id=6402
+                    // https://bugs.chromium.org/p/chromium/issues/detail?id=6402
                     session.put("frame-border", "1");
                     session.put("frameset-border", "2");
                 }

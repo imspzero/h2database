@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,13 +7,11 @@ package org.h2.pagestore.db;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.concurrent.TimeUnit;
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
 import org.h2.command.ddl.CreateTableData;
 import org.h2.engine.Constants;
-import org.h2.engine.DbObject;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.engine.SysProperties;
 import org.h2.index.Cursor;
 import org.h2.index.Index;
@@ -21,11 +19,9 @@ import org.h2.index.IndexType;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
 import org.h2.result.Row;
-import org.h2.schema.SchemaObject;
-import org.h2.table.Column;
+import org.h2.result.SearchRow;
 import org.h2.table.IndexColumn;
 import org.h2.table.RegularTable;
-import org.h2.util.MathUtils;
 import org.h2.util.Utils;
 import org.h2.value.CompareMode;
 
@@ -41,7 +37,7 @@ public class PageStoreTable extends RegularTable {
      * The queue of sessions waiting to lock the table. It is a FIFO queue to
      * prevent starvation, since Java's synchronized locking is biased.
      */
-    private final ArrayDeque<Session> waitingSessions = new ArrayDeque<>();
+    private final ArrayDeque<SessionLocal> waitingSessions = new ArrayDeque<>();
     private final Trace traceLock;
     private final ArrayList<Index> indexes = Utils.newSmallArrayList();
     private long lastModificationId;
@@ -68,19 +64,19 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public void close(Session session) {
+    public void close(SessionLocal session) {
         for (Index index : indexes) {
             index.close(session);
         }
     }
 
     @Override
-    public Row getRow(Session session, long key) {
+    public Row getRow(SessionLocal session, long key) {
         return scanIndex.getRow(session, key);
     }
 
     @Override
-    public void addRow(Session session, Row row) {
+    public void addRow(SessionLocal session, Row row) {
         lastModificationId = database.getNextModificationDataId();
         int i = 0;
         try {
@@ -109,32 +105,21 @@ public class PageStoreTable extends RegularTable {
         analyzeIfRequired(session);
     }
 
-    private void checkRowCount(Session session, Index index, int offset) {
+    private void checkRowCount(SessionLocal session, Index index, int offset) {
         if (SysProperties.CHECK) {
             if (!(index instanceof PageDelegateIndex)) {
                 long rc = index.getRowCount(session);
                 if (rc != rowCount + offset) {
-                    DbException.throwInternalError(
-                            "rowCount expected " + (rowCount + offset) +
-                            " got " + rc + " " + getName() + "." + index.getName());
+                    throw DbException.getInternalError("rowCount expected " + (rowCount + offset) + " got " + rc + ' '
+                            + getName() + '.' + index.getName());
                 }
             }
         }
     }
 
     @Override
-    public Index getScanIndex(Session session) {
+    public Index getScanIndex(SessionLocal session) {
         return indexes.get(0);
-    }
-
-    @Override
-    public Index getUniqueIndex() {
-        for (Index idx : indexes) {
-            if (idx.getIndexType().isUnique()) {
-                return idx;
-            }
-        }
-        return null;
     }
 
     @Override
@@ -143,19 +128,15 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public Index addIndex(Session session, String indexName, int indexId,
-            IndexColumn[] cols, IndexType indexType, boolean create,
-            String indexComment) {
-        if (indexType.isPrimaryKey()) {
-            for (IndexColumn c : cols) {
-                Column column = c.column;
-                if (column.isNullable()) {
-                    throw DbException.get(
-                            ErrorCode.COLUMN_MUST_NOT_BE_NULLABLE_1, column.getName());
-                }
-                column.setPrimaryKey(true);
+    public Index addIndex(SessionLocal session, String indexName, int indexId, IndexColumn[] cols,
+            int uniqueColumnCount, IndexType indexType, boolean create, String indexComment) {
+        if (indexType.isSpatial()) {
+            if (session.isQuirksMode()) {
+                return null;
             }
+            throw DbException.getUnsupportedException("MV_STORE=FALSE && SPATIAL INDEX");
         }
+        cols = prepareColumns(database, cols, indexType);
         boolean isSessionTemporary = isTemporary() && !isGlobalTemporary();
         if (!isSessionTemporary) {
             database.lockMeta(session);
@@ -176,31 +157,22 @@ public class PageStoreTable extends RegularTable {
                 mainIndex.setMainIndexColumn(mainIndexColumn);
                 index = new PageDelegateIndex(this, indexId, indexName,
                         indexType, mainIndex, create, session);
-            } else if (indexType.isSpatial()) {
-                index = new SpatialTreeIndex(this, indexId, indexName, cols,
-                        indexType, true, create, session);
             } else {
-                index = new PageBtreeIndex(this, indexId, indexName, cols,
-                        indexType, create, session);
+                index = new PageBtreeIndex(this, indexId, indexName, cols, uniqueColumnCount, indexType, create,
+                        session);
             }
         } else {
             if (indexType.isHash()) {
                 if (cols.length != 1) {
-                    throw DbException.getUnsupportedException(
-                            "hash indexes may index only one column");
+                    throw DbException.getUnsupportedException("hash indexes may index only one column");
                 }
-                if (indexType.isUnique()) {
-                    index = new HashIndex(this, indexId, indexName, cols,
-                            indexType);
+                if (uniqueColumnCount > 0) {
+                    index = new HashIndex(this, indexId, indexName, cols, indexType);
                 } else {
-                    index = new NonUniqueHashIndex(this, indexId, indexName,
-                            cols, indexType);
+                    index = new NonUniqueHashIndex(this, indexId, indexName, cols, indexType);
                 }
-            } else if (indexType.isSpatial()) {
-                index = new SpatialTreeIndex(this, indexId, indexName, cols,
-                        indexType, false, true, session);
             } else {
-                index = new TreeIndex(this, indexId, indexName, cols, indexType);
+                index = new TreeIndex(this, indexId, indexName, cols, uniqueColumnCount, indexType);
             }
         }
         if (index.needRebuild() && rowCount > 0) {
@@ -213,10 +185,8 @@ public class PageStoreTable extends RegularTable {
                 int bufferSize = (int) Math.min(rowCount, database.getMaxMemoryRows());
                 ArrayList<Row> buffer = new ArrayList<>(bufferSize);
                 String n = getName() + ":" + index.getName();
-                int t = MathUtils.convertLongToInt(total);
                 while (cursor.next()) {
-                    database.setProgress(DatabaseEventListener.STATE_CREATE_INDEX, n,
-                            MathUtils.convertLongToInt(i++), t);
+                    database.setProgress(DatabaseEventListener.STATE_CREATE_INDEX, n, i++, total);
                     Row row = cursor.get();
                     buffer.add(row);
                     if (buffer.size() >= bufferSize) {
@@ -226,8 +196,7 @@ public class PageStoreTable extends RegularTable {
                 }
                 addRowsToIndex(session, buffer, index);
                 if (remaining != 0) {
-                    DbException.throwInternalError("rowcount remaining=" +
-                            remaining + " " + getName());
+                    throw DbException.getInternalError("rowcount remaining=" + remaining + ' ' + getName());
                 }
             } catch (DbException e) {
                 getSchema().freeUniqueName(indexName);
@@ -258,12 +227,12 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         return rowCount;
     }
 
     @Override
-    public void removeRow(Session session, Row row) {
+    public void removeRow(SessionLocal session, Row row) {
         lastModificationId = database.getNextModificationDataId();
         int i = indexes.size() - 1;
         try {
@@ -293,17 +262,19 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public void truncate(Session session) {
+    public long truncate(SessionLocal session) {
         lastModificationId = database.getNextModificationDataId();
+        long result = rowCount;
         for (int i = indexes.size() - 1; i >= 0; i--) {
             Index index = indexes.get(i);
             index.truncate(session);
         }
         rowCount = 0;
         changesSinceAnalyze = 0;
+        return result;
     }
 
-    private void analyzeIfRequired(Session session) {
+    private void analyzeIfRequired(SessionLocal session) {
         if (nextAnalyze == 0 || nextAnalyze > changesSinceAnalyze++) {
             return;
         }
@@ -316,7 +287,7 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public boolean lock(Session session, boolean exclusive,
+    public boolean lock(SessionLocal session, boolean exclusive,
             boolean forceLockEvenInMvcc) {
         int lockMode = database.getLockMode();
         if (lockMode == Constants.LOCK_MODE_OFF) {
@@ -344,7 +315,7 @@ public class PageStoreTable extends RegularTable {
         return false;
     }
 
-    private void doLock1(Session session, int lockMode, boolean exclusive) {
+    private void doLock1(SessionLocal session, int lockMode, boolean exclusive) {
         traceLock(session, exclusive, "requesting for");
         // don't get the current time unless necessary
         long max = 0;
@@ -357,7 +328,7 @@ public class PageStoreTable extends RegularTable {
                 }
             }
             if (checkDeadlock) {
-                ArrayList<Session> sessions = checkDeadlock(session, null, null);
+                ArrayList<SessionLocal> sessions = checkDeadlock(session, null, null);
                 if (sessions != null) {
                     throw DbException.get(ErrorCode.DEADLOCK_1,
                             getDeadlockDetails(sessions, exclusive));
@@ -367,10 +338,10 @@ public class PageStoreTable extends RegularTable {
                 checkDeadlock = true;
             }
             long now = System.nanoTime();
-            if (max == 0) {
+            if (max == 0L) {
                 // try at least one more time
-                max = now + TimeUnit.MILLISECONDS.toNanos(session.getLockTimeout());
-            } else if (now >= max) {
+                max = Utils.nanoTimePlusMillis(now, session.getLockTimeout());
+            } else if (now - max >= 0L) {
                 traceLock(session, exclusive, "timeout after " + session.getLockTimeout());
                 throw DbException.get(ErrorCode.LOCK_TIMEOUT_1, getName());
             }
@@ -387,8 +358,7 @@ public class PageStoreTable extends RegularTable {
                     }
                 }
                 // don't wait too long so that deadlocks are detected early
-                long sleep = Math.min(Constants.DEADLOCK_CHECK,
-                        TimeUnit.NANOSECONDS.toMillis(max - now));
+                long sleep = Math.min(Constants.DEADLOCK_CHECK, (max - now) / 1_000_000);
                 if (sleep == 0) {
                     sleep = 1;
                 }
@@ -399,12 +369,12 @@ public class PageStoreTable extends RegularTable {
         }
     }
 
-    private boolean doLock2(Session session, int lockMode, boolean exclusive) {
+    private boolean doLock2(SessionLocal session, int lockMode, boolean exclusive) {
         if (exclusive) {
             if (lockExclusiveSession == null) {
                 if (lockSharedSessions.isEmpty()) {
                     traceLock(session, exclusive, "added for");
-                    session.addLock(this);
+                    session.registerTableAsLocked(this);
                     lockExclusiveSession = session;
                     return true;
                 } else if (lockSharedSessions.size() == 1 &&
@@ -417,19 +387,12 @@ public class PageStoreTable extends RegularTable {
         } else {
             if (lockExclusiveSession == null) {
                 if (lockMode == Constants.LOCK_MODE_READ_COMMITTED) {
-                    if (!database.isMultiThreaded()) {
-                        // READ_COMMITTED: a read lock is acquired,
-                        // but released immediately after the operation
-                        // is complete.
-                        // When allowing only one thread, no lock is
-                        // required.
-                        // Row level locks work like read committed.
-                        return true;
-                    }
+                    // PageStore is single-threaded, no lock is required
+                    return true;
                 }
                 if (!lockSharedSessions.containsKey(session)) {
                     traceLock(session, exclusive, "ok");
-                    session.addLock(this);
+                    session.registerTableAsLocked(this);
                     lockSharedSessions.put(session, session);
                 }
                 return true;
@@ -438,7 +401,7 @@ public class PageStoreTable extends RegularTable {
         return false;
     }
 
-    private void traceLock(Session session, boolean exclusive, String s) {
+    private void traceLock(SessionLocal session, boolean exclusive, String s) {
         if (traceLock.isDebugEnabled()) {
             traceLock.debug("{0} {1} {2} {3}", session.getId(),
                     exclusive ? "exclusive write lock" : "shared read lock", s, getName());
@@ -446,7 +409,7 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public void unlock(Session s) {
+    public void unlock(SessionLocal s) {
         if (database != null) {
             traceLock(s, lockExclusiveSession == s, "unlock");
             if (lockExclusiveSession == s) {
@@ -474,7 +437,7 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public void removeChildrenAndResources(Session session) {
+    public void removeChildrenAndResources(SessionLocal session) {
         if (containsLargeObject) {
             // unfortunately, the data is gone on rollback
             truncate(session);
@@ -491,14 +454,6 @@ public class PageStoreTable extends RegularTable {
             // needed for session temporary indexes
             indexes.remove(index);
         }
-        if (SysProperties.CHECK) {
-            for (SchemaObject obj : database.getAllSchemaObjects(DbObject.INDEX)) {
-                Index index = (Index) obj;
-                if (index.getTable() == this) {
-                    DbException.throwInternalError("index not dropped: " + index.getName());
-                }
-            }
-        }
         scanIndex.remove(session);
         database.removeMeta(session, getId());
         scanIndex = null;
@@ -513,8 +468,8 @@ public class PageStoreTable extends RegularTable {
     }
 
     @Override
-    public long getRowCountApproximation() {
-        return scanIndex.getRowCountApproximation();
+    public long getRowCountApproximation(SessionLocal session) {
+        return scanIndex.getRowCountApproximation(session);
     }
 
     @Override
@@ -524,6 +479,11 @@ public class PageStoreTable extends RegularTable {
 
     public void setCompareMode(CompareMode compareMode) {
         this.compareMode = compareMode;
+    }
+
+    @Override
+    public int getMainIndexColumn() {
+        return mainIndex != null ? mainIndex.getMainIndexColumn() : SearchRow.ROWID_INDEX;
     }
 
 }

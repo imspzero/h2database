@@ -1,15 +1,14 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.pagestore.db;
 
 import org.h2.api.ErrorCode;
-import org.h2.command.dml.AllColumnsForPlan;
+import org.h2.command.query.AllColumnsForPlan;
 import org.h2.engine.Constants;
-import org.h2.engine.Session;
-import org.h2.engine.SysProperties;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Cursor;
 import org.h2.index.IndexType;
 import org.h2.message.DbException;
@@ -23,6 +22,7 @@ import org.h2.table.IndexColumn;
 import org.h2.table.TableFilter;
 import org.h2.util.MathUtils;
 import org.h2.value.Value;
+import org.h2.value.ValueLob;
 import org.h2.value.ValueNull;
 
 /**
@@ -46,9 +46,9 @@ public class PageDataIndex extends PageIndex {
     private int memoryPerPage;
     private int memoryCount;
 
-    public PageDataIndex(PageStoreTable table, int id, IndexColumn[] columns,
-            IndexType indexType, boolean create, Session session) {
-        super(table, id, table.getName() + "_DATA", columns, indexType);
+    public PageDataIndex(PageStoreTable table, int id, IndexColumn[] columns, IndexType indexType, boolean create,
+            SessionLocal session) {
+        super(table, id, table.getName() + "_DATA", columns, 0, indexType);
 
         // trace = database.getTrace(Trace.PAGE_STORE + "_di");
         // trace.setLevel(TraceSystem.DEBUG);
@@ -56,7 +56,7 @@ public class PageDataIndex extends PageIndex {
         this.store = database.getPageStore();
         store.addIndex(this);
         if (!database.isPersistent()) {
-            throw DbException.throwInternalError(table.getName());
+            throw DbException.getInternalError(table.getName());
         }
         if (create) {
             rootPageId = store.allocatePage();
@@ -73,7 +73,7 @@ public class PageDataIndex extends PageIndex {
             trace.debug("{0} opened rows: {1}", this, rowCount);
         }
         table.setRowCount(rowCount);
-        memoryPerPage = (Constants.MEMORY_PAGE_DATA + store.getPageSize()) >> 2;
+        memoryPerPage = (PageData.MEMORY_PAGE_DATA + store.getPageSize()) >> 2;
     }
 
     @Override
@@ -85,7 +85,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public void add(Session session, Row row) {
+    public void add(SessionLocal session, Row row) {
         boolean retry = false;
         if (mainIndexColumn != -1) {
             row.setKey(row.getValue(mainIndexColumn).getLong());
@@ -98,12 +98,12 @@ public class PageDataIndex extends PageIndex {
         if (tableData.getContainsLargeObject()) {
             for (int i = 0, len = row.getColumnCount(); i < len; i++) {
                 Value v = row.getValue(i);
-                Value v2 = v.copy(database, getId());
-                if (v2.isLinkedToTable()) {
-                    session.removeAtCommitStop(v2);
-                }
-                if (v != v2) {
-                    row.setValue(i, v2);
+                if (v instanceof ValueLob) {
+                    ValueLob lob = ((ValueLob) v).copy(database, getId());
+                    session.removeAtCommitStop(lob);
+                    if (v != lob) {
+                        row.setValue(i, lob);
+                    }
                 }
             }
         }
@@ -142,7 +142,7 @@ public class PageDataIndex extends PageIndex {
         lastKey = Math.max(lastKey, row.getKey());
     }
 
-    private void addTry(Session session, Row row) {
+    private void addTry(SessionLocal session, Row row) {
         while (true) {
             PageData root = getPage(rootPageId, 0);
             int splitPoint = root.addRowTry(row);
@@ -166,7 +166,6 @@ public class PageDataIndex extends PageIndex {
             store.update(newRoot);
             root = newRoot;
         }
-        row.setDeleted(false);
         invalidateRowCount();
         rowCount++;
         store.logAddOrRemoveRow(session, tableData.getId(), row, true);
@@ -208,16 +207,10 @@ public class PageDataIndex extends PageIndex {
         PageData p = (PageData) pd;
         if (parent != -1) {
             if (p.getParentPageId() != parent) {
-                throw DbException.throwInternalError(p +
-                        " parent " + p.getParentPageId() + " expected " + parent);
+                throw DbException.getInternalError(p + " parent " + p.getParentPageId() + " expected " + parent);
             }
         }
         return p;
-    }
-
-    @Override
-    public boolean canGetFirstOrLast() {
-        return false;
     }
 
     /**
@@ -242,7 +235,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public Cursor find(Session session, SearchRow first, SearchRow last) {
+    public Cursor find(SessionLocal session, SearchRow first, SearchRow last) {
         long from = first == null ? Long.MIN_VALUE : first.getKey();
         long to = last == null ? Long.MAX_VALUE : last.getKey();
         PageData root = getPage(rootPageId, 0);
@@ -258,14 +251,9 @@ public class PageDataIndex extends PageIndex {
      * @param last the key of the last row
      * @return the cursor
      */
-    Cursor find(Session session, long first, long last) {
+    Cursor find(SessionLocal session, long first, long last) {
         PageData root = getPage(rootPageId, 0);
         return root.find(session, first, last);
-    }
-
-    @Override
-    public Cursor findFirstOrLast(Session session, boolean first) {
-        throw DbException.throwInternalError(toString());
     }
 
     long getLastKey() {
@@ -274,14 +262,14 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public double getCost(Session session, int[] masks,
+    public double getCost(SessionLocal session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
         // The +200 is so that indexes that can return the same data, but have less
         // columns, will take precedence. This all works out easier in the MVStore case,
         // because MVStore uses the same cost calculation code for the ScanIndex (i.e.
         // the MVPrimaryIndex) and all other indices.
-        return 10 * (tableData.getRowCountApproximation() +
+        return 10 * (tableData.getRowCountApproximation(session) +
                 Constants.COST_ROW_OFFSET) + 200;
     }
 
@@ -291,12 +279,12 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public void remove(Session session, Row row) {
+    public void remove(SessionLocal session, Row row) {
         if (tableData.getContainsLargeObject()) {
             for (int i = 0, len = row.getColumnCount(); i < len; i++) {
                 Value v = row.getValue(i);
-                if (v.isLinkedToTable()) {
-                    session.removeAtCommit(v);
+                if (v instanceof ValueLob) {
+                    session.removeAtCommit((ValueLob) v);
                 }
             }
         }
@@ -320,7 +308,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public void remove(Session session) {
+    public void remove(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("{0} remove", this);
         }
@@ -330,7 +318,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public void truncate(Session session) {
+    public void truncate(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("{0} truncate", this);
         }
@@ -364,7 +352,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public Row getRow(Session session, long key) {
+    public Row getRow(SessionLocal session, long key) {
         return getRowWithKey(key);
     }
 
@@ -384,12 +372,12 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public long getRowCountApproximation() {
+    public long getRowCountApproximation(SessionLocal session) {
         return rowCount;
     }
 
     @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         return rowCount;
     }
 
@@ -416,7 +404,7 @@ public class PageDataIndex extends PageIndex {
     }
 
     @Override
-    public void close(Session session) {
+    public void close(SessionLocal session) {
         if (trace.isDebugEnabled()) {
             trace.debug("{0} close", this);
         }
@@ -431,7 +419,7 @@ public class PageDataIndex extends PageIndex {
      * @param session the session
      * @param newPos the new position
      */
-    void setRootPageId(Session session, int newPos) {
+    void setRootPageId(SessionLocal session, int newPos) {
         store.removeMeta(this, session);
         this.rootPageId = newPos;
         store.addMeta(this, session);
@@ -458,10 +446,6 @@ public class PageDataIndex extends PageIndex {
 
     @Override
     public void writeRowCount() {
-        if (SysProperties.MODIFY_ON_WRITE && rootPageId == 0) {
-            // currently creating the index
-            return;
-        }
         try {
             PageData root = getPage(rootPageId, 0);
             root.setRowCountStored(MathUtils.convertLongToInt(rowCount));
@@ -472,7 +456,7 @@ public class PageDataIndex extends PageIndex {
 
     @Override
     public String getPlanSQL() {
-        return table.getSQL(new StringBuilder(), false).append(".tableScan").toString();
+        return table.getSQL(new StringBuilder(), TRACE_SQL_FLAGS).append(".tableScan").toString();
     }
 
     int getMemoryPerPage() {

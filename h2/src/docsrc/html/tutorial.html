@@ -1,6 +1,6 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <!--
-Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
 and the EPL 1.0 (https://h2database.com/html/license.html).
 Initial Developer: H2 Group
 -->
@@ -45,8 +45,6 @@ Tutorial
     Using H2 with jOOQ</a><br />
 <a href="#web_applications">
     Using Databases in Web Applications</a><br />
-<a href="#android">
-    Android</a><br />
 <a href="#csv">
     CSV (Comma Separated Values) Support</a><br />
 <a href="#upgrade_backup_restore">
@@ -301,7 +299,7 @@ otherwise they are not parsed correctly. If in doubt, add <code>;</code> before 
             @attributes, @best_row_identifier, @catalogs, @columns,
             @column_privileges, @cross_references, @exported_keys,
             @imported_keys, @index_info,  @primary_keys, @procedures,
-            @procedure_columns, @schemas, @super_tables, @super_types,
+            @procedure_columns, @pseudo_columns, @schemas, @super_tables, @super_types,
             @tables, @table_privileges, @table_types, @type_info, @udts,
             @version_columns
             </code>
@@ -317,10 +315,13 @@ otherwise they are not parsed correctly. If in doubt, add <code>;</code> before 
     </tr>
     <tr>
         <td class="notranslate">
-            @generated&nbsp;insert&nbsp;into&nbsp;test()&nbsp;values();
+            @generated&nbsp;insert&nbsp;into&nbsp;test()&nbsp;values();<br />
+            @generated(1)&nbsp;insert&nbsp;into&nbsp;test()&nbsp;values();<br />
+            @generated(ID, "TIMESTAMP")&nbsp;insert&nbsp;into&nbsp;test()&nbsp;values();
         </td>
         <td>
             Show the result of <code>Statement.getGeneratedKeys()</code>.
+            Names or one-based indexes of required columns can be optionally specified.
         </td>
     </tr>
     <tr>
@@ -597,13 +598,13 @@ The TCP server can be stopped from another process.
 To stop the server from the command line, run:
 </p>
 <pre>
-java org.h2.tools.Server -tcpShutdown tcp://localhost:9092
+java org.h2.tools.Server -tcpShutdown tcp://localhost:9092 -tcpPassword password
 </pre>
 <p>
 To stop the server from a user application, use the following code:
 </p>
 <pre>
-org.h2.tools.Server.shutdownTcpServer("tcp://localhost:9094");
+org.h2.tools.Server.shutdownTcpServer("tcp://localhost:9092", "password", false, false);
 </pre>
 <p>
 This function will only stop the TCP server.
@@ -611,7 +612,7 @@ If other server were started in the same process, they will continue to run.
 To avoid recovery when the databases are opened the next time,
 all connections to the databases should be closed before calling this method.
 To stop a remote server, remote connections must be enabled on the server.
-Shutting down a TCP server can be protected using the option <code>-tcpPassword</code>
+Shutting down a TCP server is protected using the option <code>-tcpPassword</code>
 (the same password must be used to start and stop the TCP server).
 </p>
 
@@ -662,7 +663,7 @@ To use H2 within Glassfish, copy the h2*.jar to the directory <code>glassfish/gl
 <p>
 To use H2 in EclipseLink, use the platform class <code>org.eclipse.persistence.platform.database.H2Platform</code>.
 If this platform is not available in your version of EclipseLink, you can use the OraclePlatform instead in many case.
-See also <a href="http://wiki.eclipse.org/EclipseLink/Development/Incubator/Extensions/H2Platform">H2Platform</a>.
+See also <a href="https://wiki.eclipse.org/EclipseLink/Development/Incubator/Extensions/H2Platform">H2Platform</a>.
 </p>
 
 <h2 id="using_activemq">Using Apache ActiveMQ</h2>
@@ -682,7 +683,7 @@ Another (more dangerous) solution is to set <code>useDatabaseLock</code> to fals
 <p>
 There is a known issue when using the Netbeans SQL Execution Window:
 before executing a query, another query in the form <code>SELECT COUNT(*) FROM &lt;query&gt;</code> is run.
-This is a problem for queries that modify state, such as <code>SELECT SEQ.NEXTVAL</code>.
+This is a problem for queries that modify state, such as <code>SELECT NEXT VALUE FOR SEQ</code>.
 In this case, two sequence values are allocated instead of just one.
 </p>
 
@@ -878,57 +879,6 @@ To create a web application with just the H2 Console, run the following command:
 build warConsole
 </pre>
 
-<h2 id="android">Android</h2>
-<p>
-You can use this database on an Android device (using the Dalvik VM) instead of or in addition to SQLite.
-So far, only very few tests and benchmarks were run, but it seems that performance is similar to SQLite,
-except for opening and closing a database, which is not yet optimized in H2
-(H2 takes about 0.2 seconds, and SQLite about 0.02 seconds).
-Read operations seem to be a bit faster than SQLite, and write operations seem to be slower.
-So far, only very few tests have been run, and everything seems to work as expected.
-Fulltext search was not yet tested, however the native fulltext search should work.
-</p>
-<p>
-Reasons to use H2 instead of SQLite are:
-</p>
-<ul><li>Full Unicode support including UPPER() and LOWER().
-</li><li>Streaming API for BLOB and CLOB data.
-</li><li>Fulltext search.
-</li><li>Multiple connections.
-</li><li>User defined functions and triggers.
-</li><li>Database file encryption.
-</li><li>Reading and writing CSV files (this feature can be used outside the database as well).
-</li><li>Referential integrity and check constraints.
-</li><li>Better data type and SQL support.
-</li><li>In-memory databases, read-only databases, linked tables.
-</li><li>Better compatibility with other databases which simplifies porting applications.
-</li><li>Possibly better performance (so far for read operations).
-</li><li>Server mode (accessing a database on a different machine over TCP/IP).
-</li></ul>
-<p>
-Currently only the JDBC API is supported (it is planned to support the Android database API in future releases).
-Both the regular H2 jar file and the smaller <code>h2small-*.jar</code> can be used.
-To create the smaller jar file, run the command <code>./build.sh jarSmall</code> (Linux / Mac OS)
-or <code>build.bat jarSmall</code> (Windows).
-</p>
-<p>
-The database files needs to be stored in a place that is accessible for the application.
-Example:
-</p>
-<pre>
-String url = "jdbc:h2:/data/data/" +
-    "com.example.hello" +
-    "/data/hello" +
-    ";FILE_LOCK=FS" +
-    ";PAGE_SIZE=1024" +
-    ";CACHE_SIZE=8192";
-conn = DriverManager.getConnection(url);
-...
-</pre>
-<p>
-Limitations: Using a connection pool is currently not supported, because the required <code>javax.sql.</code> classes are not available on Android.
-</p>
-
 <h2 id="csv">CSV (Comma Separated Values) Support</h2>
 <p>
 The CSV file support can be used inside the database using the functions
@@ -1062,6 +1012,15 @@ SQL script files may contain references to other script files, in the form of
 need to be available on the server side.
 </p>
 
+<p>
+If the script was generated by H2 1.4.200 or an older version, add <code>VARIABLE_BINARY</code> option to import it
+into more recent version.
+</p>
+
+<pre>
+java org.h2.tools.RunScript -url jdbc:h2:~/test -user sa -script test.zip -options compression zip variable_binary
+</pre>
+
 <h3>Online Backup</h3>
 <p>
 The <code>BACKUP</code> SQL statement and the <code>Backup</code> tool both create a zip file
@@ -1189,7 +1148,7 @@ Another solution to use H2 in NeoOffice is:
 </li></ul>
 <p>
 This can be done by create it using the NetBeans OpenOffice plugin.
-See also <a href="http://wiki.services.openoffice.org/wiki/Extensions_development_java">Extensions Development</a>.
+See also <a href="https://wiki.openoffice.org/wiki/Extensions_development_java">Extensions Development</a>.
 </p>
 
 <h2 id="web_start">Java Web Start / JNLP</h2>
@@ -1213,7 +1172,7 @@ Still, using a connection pool improves performance if you open and close connec
 A simple connection pool is included in H2. It is based on the
 <a href="http://www.source-code.biz/miniconnectionpoolmanager/">Mini Connection Pool Manager</a>
 from Christian d'Heureuse. There are other, more complex, open source connection pools available,
-for example the <a href="http://commons.apache.org/proper/commons-dbcp/">Apache Commons DBCP</a>.
+for example the <a href="https://commons.apache.org/proper/commons-dbcp/">Apache Commons DBCP</a>.
 For H2, it is about twice as faster to get a connection from the built-in connection pool than to get
 one using <code>DriverManager.getConnection()</code>.The build-in connection pool is used as follows:
 </p>
@@ -1299,8 +1258,7 @@ org.h2.fulltext.FullText.searchData(conn, text, limit, offset);
 <h3>Using the Apache Lucene Fulltext Search</h3>
 <p>
 To use the Apache Lucene full text search, you need the Lucene library in the classpath.
-Apache Lucene 5.5.5 or later version up to 8.0.* is required.
-Newer versions may also work, but were not tested.
+Apache Lucene 8.5.2 or binary compatible version is required.
 How to do that depends on the application; if you use the H2 Console, you can add the Lucene
 jar file to the environment variables <code>H2DRIVERS</code> or
 <code>CLASSPATH</code>.
@@ -1389,7 +1347,7 @@ The value can also be changed using the SET() method. This is useful in queries:
 </p>
 <pre>
 SET @TOTAL = NULL;
-SELECT X, SET(@TOTAL, IFNULL(@TOTAL, 1.) * X) F FROM SYSTEM_RANGE(1, 50);
+SELECT X, SET(@TOTAL, COALESCE(@TOTAL, 1.) * X) F FROM SYSTEM_RANGE(1, 50);
 </pre>
 <p>
 Variables that are not set evaluate to <code>NULL</code>.

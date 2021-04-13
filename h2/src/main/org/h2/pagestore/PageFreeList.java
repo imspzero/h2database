@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,7 +7,7 @@ package org.h2.pagestore;
 
 import java.util.BitSet;
 
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.store.Data;
 
 /**
@@ -208,7 +208,7 @@ public class PageFreeList extends Page {
     }
 
     @Override
-    public void moveTo(Session session, int newPos) {
+    public void moveTo(SessionLocal session, int newPos) {
         // the old data does not need to be copied, as free-list pages
         // at the end of the file are not required
         store.free(getPos(), false);

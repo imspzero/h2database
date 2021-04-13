@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -40,7 +40,7 @@ public class TestCache extends TestDb implements CacheWriter {
     public static void main(String... a) throws Exception {
         TestBase test = TestBase.createCaller().init();
 //        test.config.traceTest = true;
-        test.test();
+        test.testFromMain();
     }
 
     @Override
@@ -129,8 +129,7 @@ public class TestCache extends TestDb implements CacheWriter {
     private static int getReadCount(Statement stat) throws Exception {
         ResultSet rs;
         rs = stat.executeQuery(
-                "select value from information_schema.settings " +
-                "where name = 'info.FILE_READ'");
+                "SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'info.FILE_READ'");
         rs.next();
         return rs.getInt(1);
     }
@@ -169,8 +168,7 @@ public class TestCache extends TestDb implements CacheWriter {
         // stat.execute("select data from test where data >= ''");
 
         rs = stat.executeQuery(
-                "select value from information_schema.settings " +
-                "where name = 'info.CACHE_SIZE'");
+                "SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'info.CACHE_SIZE'");
         rs.next();
         int calculated = rs.getInt(1);
         rs = null;
@@ -186,12 +184,9 @@ public class TestCache extends TestDb implements CacheWriter {
                 " after closing: " + afterClose);
     }
 
-    private int getRealMemory() {
+    private static long getRealMemory() {
         StringUtils.clearCache();
         Value.clearCache();
-        eatMemory(100);
-        freeMemory();
-        System.gc();
         return Utils.getMemoryUsed();
     }
 

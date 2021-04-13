@@ -1,14 +1,15 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.db;
 
+import java.util.Random;
 import org.h2.mvstore.cache.CacheLongKeyLIRS;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
-import java.util.Random;
+import org.h2.util.Utils;
 
 /**
  * Class TestLIRSMemoryConsumption.
@@ -27,7 +28,7 @@ public class TestLIRSMemoryConsumption extends TestDb {
      *              ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -39,14 +40,14 @@ public class TestLIRSMemoryConsumption extends TestDb {
         testMemoryConsumption();
     }
 
-    private void testMemoryConsumption() {
+    private static void testMemoryConsumption() {
         int size = 1_000_000;
         Random rng = new Random();
         CacheLongKeyLIRS.Config config = new CacheLongKeyLIRS.Config();
         for (int mb = 1; mb <= 16; mb *= 2) {
             config.maxMemory = mb * 1024 * 1024;
             CacheLongKeyLIRS<Object> cache = new CacheLongKeyLIRS<>(config);
-            long memoryUsedInitial = getMemUsedKb();
+            long memoryUsedInitial = Utils.getMemoryUsed();
             for (int i = 0; i < size; i++) {
                 cache.put(i, createValue(i), getValueSize(i));
             }
@@ -73,11 +74,9 @@ public class TestLIRSMemoryConsumption extends TestDb {
                     cache.put(key, createValue(key), getValueSize(key));
                 }
             }
-
-            eatMemory(1);
-            freeMemory();
+            Utils.collectGarbage();
             cache.trimNonResidentQueue();
-            long memoryUsed = getMemUsedKb();
+            long memoryUsed = Utils.getMemoryUsed();
 
             int sizeHot = cache.sizeHot();
             int sizeResident = cache.size();
@@ -100,20 +99,5 @@ public class TestLIRSMemoryConsumption extends TestDb {
     private static int getValueSize(long key) {
 //        return 16;
         return 2560;
-    }
-
-    private static long getMemUsedKb() {
-        Runtime rt = Runtime.getRuntime();
-        long memory = Long.MAX_VALUE;
-        for (int i = 0; i < 8; i++) {
-            rt.gc();
-            long memNow = (rt.totalMemory() - rt.freeMemory()) / 1024;
-            if (memNow >= memory) {
-                break;
-            }
-            memory = memNow;
-            try { Thread.sleep(1000); } catch (InterruptedException e) {/**/}
-        }
-        return memory;
     }
 }

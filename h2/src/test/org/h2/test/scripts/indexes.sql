@@ -1,4 +1,4 @@
--- Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+-- Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
 -- and the EPL 1.0 (https://h2database.com/html/license.html).
 -- Initial Developer: H2 Group
 --
@@ -361,4 +361,52 @@ EXPLAIN SELECT * FROM T WHERE A = 1 AND B = A;
 >> SELECT "PUBLIC"."T"."A", "PUBLIC"."T"."B", "PUBLIC"."T"."C" FROM "PUBLIC"."T" /* PUBLIC.T_B_IDX: B = 1 */ WHERE ("A" = 1) AND ("B" = "A")
 
 DROP TABLE T;
+> ok
+
+-- _ROWID_ tests
+
+CREATE TABLE TEST(ID INT PRIMARY KEY);
+> ok
+
+INSERT INTO TEST VALUES 1, 2, 3, 4;
+> update count: 4
+
+SELECT * FROM TEST WHERE ID >= 2 AND ID <= 3;
+> ID
+> --
+> 2
+> 3
+> rows: 2
+
+SELECT * FROM TEST WHERE _ROWID_ >= 2 AND _ROWID_ <= 3;
+> ID
+> --
+> 2
+> 3
+> rows: 2
+
+DROP TABLE TEST;
+> ok
+
+CREATE TABLE TEST(ID FLOAT PRIMARY KEY);
+> ok
+
+INSERT INTO TEST VALUES 1.0, 2.0, 3.0, 4.0;
+> update count: 4
+
+SELECT * FROM TEST WHERE ID >= 2.0 AND ID <= 3.0;
+> ID
+> ---
+> 2.0
+> 3.0
+> rows: 2
+
+SELECT * FROM TEST WHERE _ROWID_ >= 2 AND _ROWID_ <= 3;
+> ID
+> ---
+> 2.0
+> 3.0
+> rows: 2
+
+DROP TABLE TEST;
 > ok

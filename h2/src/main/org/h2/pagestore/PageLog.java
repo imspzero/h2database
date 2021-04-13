@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -13,17 +13,20 @@ import java.util.HashMap;
 
 import org.h2.api.ErrorCode;
 import org.h2.compress.CompressLZF;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.message.Trace;
+import org.h2.mvstore.DataUtils;
+import org.h2.pagestore.db.SessionPageStore;
 import org.h2.result.Row;
-import org.h2.result.RowFactory;
+import org.h2.result.SearchRow;
 import org.h2.store.Data;
 import org.h2.store.DataReader;
 import org.h2.store.InDoubtTransaction;
 import org.h2.util.IntArray;
 import org.h2.util.IntIntHashMap;
 import org.h2.util.Utils;
+import org.h2.value.TypeInfo;
 import org.h2.value.Value;
 import org.h2.value.ValueNull;
 
@@ -225,8 +228,7 @@ public class PageLog {
                     loopCount = 0;
                     loopDetect *= 2;
                 } else if (first != 0 && first == t.getPos()) {
-                    throw DbException.throwInternalError(
-                            "endless loop at " + t);
+                    throw DbException.getInternalError("endless loop at " + t);
                 }
                 t.free(currentDataPage);
                 firstTrunkPage = t.getNextTrunk();
@@ -257,9 +259,8 @@ public class PageLog {
      * committed operations are re-applied.
      *
      * @param stage the recovery stage
-     * @return whether the transaction log was empty
      */
-    boolean recover(int stage) {
+    void recover(int stage) {
         if (trace.isDebugEnabled()) {
             trace.debug("log recover stage: " + stage);
         }
@@ -268,14 +269,13 @@ public class PageLog {
                     logKey, firstTrunkPage, firstDataPage);
             usedLogPages = in.allocateAllPages();
             in.close();
-            return true;
+            return;
         }
         PageInputStream pageIn = new PageInputStream(store,
                 logKey, firstTrunkPage, firstDataPage);
         DataReader in = new DataReader(pageIn);
         int logId = 0;
         Data data = store.createData();
-        boolean isEmpty = true;
         try {
             int pos = 0;
             while (true) {
@@ -284,7 +284,6 @@ public class PageLog {
                     break;
                 }
                 pos++;
-                isEmpty = false;
                 if (x == UNDO) {
                     int pageId = in.readVarInt();
                     int size = in.readVarInt();
@@ -299,7 +298,7 @@ public class PageLog {
                             compress.expand(compressBuffer, 0, size,
                                     data.getBytes(), 0, store.getPageSize());
                         } catch (ArrayIndexOutOfBoundsException e) {
-                            DbException.convertToIOException(e);
+                            DataUtils.convertToIOException(e);
                         }
                     }
                     if (stage == RECOVERY_STAGE_UNDO) {
@@ -319,7 +318,7 @@ public class PageLog {
                 } else if (x == ADD) {
                     int sessionId = in.readVarInt();
                     int tableId = in.readVarInt();
-                    Row row = readRow(store.getDatabase().getRowFactory(), in, data);
+                    Row row = readRow(in, data);
                     if (stage == RECOVERY_STAGE_UNDO) {
                         store.allocateIfIndexRoot(pos, tableId, row);
                     } else if (stage == RECOVERY_STAGE_REDO) {
@@ -429,7 +428,6 @@ public class PageLog {
         if (stage == RECOVERY_STAGE_REDO) {
             usedLogPages = null;
         }
-        return isEmpty;
     }
 
     /**
@@ -455,12 +453,11 @@ public class PageLog {
     /**
      * Read a row from an input stream.
      *
-     * @param rowFactory the row factory
      * @param in the input stream
      * @param data a temporary buffer
      * @return the row
      */
-    public static Row readRow(RowFactory rowFactory, DataReader in, Data data) throws IOException {
+    public static Row readRow(DataReader in, Data data) throws IOException {
         long key = in.readVarLong();
         int len = in.readVarInt();
         data.reset();
@@ -469,11 +466,9 @@ public class PageLog {
         int columnCount = data.readVarInt();
         Value[] values = new Value[columnCount];
         for (int i = 0; i < columnCount; i++) {
-            values[i] = data.readValue();
+            values[i] = data.readValue(TypeInfo.TYPE_UNKNOWN);
         }
-        Row row = rowFactory.createRow(values, Row.MEMORY_CALCULATE);
-        row.setKey(key);
-        return row;
+        return Row.get(values, SearchRow.MEMORY_CALCULATE, key);
     }
 
     /**
@@ -501,7 +496,7 @@ public class PageLog {
             trace.debug("log undo " + pageId);
         }
         if (page == null) {
-            DbException.throwInternalError("Undo entry not written");
+            throw DbException.getInternalError("Undo entry not written");
         }
         undo.set(pageId);
         undoAll.set(pageId);
@@ -513,7 +508,7 @@ public class PageLog {
         } else {
             int pageSize = store.getPageSize();
             if (COMPRESS_UNDO) {
-                int size = compress.compress(page.getBytes(),
+                int size = compress.compress(page.getBytes(), 0,
                         pageSize, compressBuffer, 0);
                 if (size < pageSize) {
                     buffer.writeVarInt(size);
@@ -570,7 +565,7 @@ public class PageLog {
         buffer.writeByte((byte) COMMIT);
         buffer.writeVarInt(sessionId);
         write(buffer);
-        if (store.getDatabase().getFlushOnEachCommit()) {
+        if (store.getFlushOnEachCommit()) {
             flush();
         }
     }
@@ -581,7 +576,7 @@ public class PageLog {
      * @param session the session
      * @param transaction the name of the transaction
      */
-    void prepareCommit(Session session, String transaction) {
+    void prepareCommit(SessionLocal session, String transaction) {
         if (trace.isDebugEnabled()) {
             trace.debug("log prepare commit s: " + session.getId() + ", " + transaction);
         }
@@ -605,7 +600,7 @@ public class PageLog {
         // store it on a separate log page
         flushOut();
         pageOut.fillPage();
-        if (store.getDatabase().getFlushOnEachCommit()) {
+        if (store.getFlushOnEachCommit()) {
             flush();
         }
     }
@@ -618,7 +613,7 @@ public class PageLog {
      * @param row the row to add
      * @param add true if the row is added, false if it is removed
      */
-    void logAddOrRemoveRow(Session session, int tableId, Row row, boolean add) {
+    void logAddOrRemoveRow(SessionPageStore session, int tableId, Row row, boolean add) {
         if (trace.isDebugEnabled()) {
             trace.debug("log " + (add ? "+" : "-") +
                     " s: " + session.getId() + " table: " + tableId + " row: " + row);
@@ -629,7 +624,11 @@ public class PageLog {
         data.reset();
         int columns = row.getColumnCount();
         data.writeVarInt(columns);
-        data.checkCapacity(row.getByteCount(data));
+        int size = 0;
+        for (Value v : row.getValueList()) {
+            size += Data.getValueLen(v);
+        }
+        data.checkCapacity(size);
         if (session.isRedoLogBinaryEnabled()) {
             for (int i = 0; i < columns; i++) {
                 data.writeValue(row.getValue(i));
@@ -637,7 +636,7 @@ public class PageLog {
         } else {
             for (int i = 0; i < columns; i++) {
                 Value v = row.getValue(i);
-                if (v.getValueType() == Value.BYTES) {
+                if (v.getValueType() == Value.VARBINARY) {
                     data.writeValue(ValueNull.INSTANCE);
                 } else {
                     data.writeValue(v);
@@ -663,7 +662,7 @@ public class PageLog {
      * @param session the session
      * @param tableId the table id
      */
-    void logTruncate(Session session, int tableId) {
+    void logTruncate(SessionPageStore session, int tableId) {
         if (trace.isDebugEnabled()) {
             trace.debug("log truncate s: " + session.getId() + " table: " + tableId);
         }
@@ -748,7 +747,7 @@ public class PageLog {
             Page p = store.getPage(trunkPage);
             PageStreamTrunk t = (PageStreamTrunk) p;
             if (t == null) {
-                throw DbException.throwInternalError(
+                throw DbException.getInternalError(
                         "log.removeUntil not found: " + firstDataPageToKeep + " last " + last);
             }
             logKey = t.getLogKey();

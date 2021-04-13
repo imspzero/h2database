@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -24,6 +24,7 @@ import static org.h2.util.geometry.GeometryUtils.Z;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 
+import org.h2.util.StringUtils;
 import org.h2.util.geometry.EWKBUtils.EWKBTarget;
 import org.h2.util.geometry.GeometryUtils.DimensionSystemTarget;
 import org.h2.util.geometry.GeometryUtils.Target;
@@ -255,7 +256,7 @@ public final class EWKTUtils {
                 while (ewkt.charAt(end - 1) <= ' ') {
                     end--;
                 }
-                srid = Integer.parseInt(ewkt.substring(offset, end).trim());
+                srid = Integer.parseInt(StringUtils.trimSubstring(ewkt, offset, end));
                 offset = idx + 1;
             } else {
                 srid = 0;
@@ -539,8 +540,7 @@ public final class EWKTUtils {
      */
     public static String ewkb2ewkt(byte[] ewkb, int dimensionSystem) {
         StringBuilder output = new StringBuilder();
-        EWKTTarget target = new EWKTTarget(output, dimensionSystem);
-        EWKBUtils.parseEWKB(ewkb, target);
+        EWKBUtils.parseEWKB(ewkb, new EWKTTarget(output, dimensionSystem));
         return output.toString();
     }
 
@@ -634,22 +634,24 @@ public final class EWKTUtils {
     /**
      * Formats type and dimension system as a string.
      *
+     * @param builder
+     *            string builder
      * @param type
      *            OGC geometry code format (type + dimensionSystem * 1000)
-     * @return formatted string
+     * @return the specified string builder
      * @throws IllegalArgumentException
      *             if type is not valid
      */
-    public static String formatGeometryTypeAndDimensionSystem(int type) {
+    public static StringBuilder formatGeometryTypeAndDimensionSystem(StringBuilder builder, int type) {
         int t = type % 1_000, d = type / 1_000;
         if (t < POINT || t > GEOMETRY_COLLECTION || d < DIMENSION_SYSTEM_XY || d > DIMENSION_SYSTEM_XYZM) {
             throw new IllegalArgumentException();
         }
-        String result = TYPES[t - 1];
+        builder.append(TYPES[t - 1]);
         if (d != DIMENSION_SYSTEM_XY) {
-            result = result + ' ' + DIMENSION_SYSTEMS[d];
+            builder.append(' ').append(DIMENSION_SYSTEMS[d]);
         }
-        return result;
+        return builder;
     }
 
     /**

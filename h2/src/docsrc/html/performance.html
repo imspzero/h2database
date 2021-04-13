@@ -1,6 +1,6 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <!--
-Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
 and the EPL 1.0 (https://h2database.com/html/license.html).
 Initial Developer: H2 Group
 -->
@@ -401,7 +401,7 @@ If a single column primary key of type <code>BIGINT, INT, SMALLINT, TINYINT</cod
 then this column is used as the key of the data b-tree.
 If no primary key has been specified, if the primary key column is of another data type,
 or if the primary key contains more than one column,
-then a hidden auto-increment column of type <code>BIGINT</code> is added to the table,
+then a hidden identity column of type <code>BIGINT</code> is added to the table,
 which is used as the key for the data b-tree.
 All other columns of the table are stored within the data area of this data b-tree
 (except for large <code>BLOB, CLOB</code> columns, which are stored externally).
@@ -491,7 +491,7 @@ Instead, use a prepared statement with arrays as in the following example:
 <pre>
 PreparedStatement prep = conn.prepareStatement(
     "SELECT * FROM TEST WHERE ID = ANY(?)");
-prep.setObject(1, new Object[] { "1", "2" });
+prep.setObject(1, new Long[] { 1L, 2L });
 ResultSet rs = prep.executeQuery();
 </pre>
 
@@ -512,7 +512,7 @@ the second level soft reference cache. See also <a href="features.html#cache_set
 Each data type has different storage and performance characteristics:
 </p>
 <ul><li>The <code>DECIMAL/NUMERIC</code> type is slower
-    and requires more storage than the <code>REAL</code> and <code>DOUBLE</code> types.
+    and requires more storage than the <code>REAL</code> and <code>DOUBLE PRECISION</code> types.
 </li><li>Text types are slower to read, write, and compare than numeric types and generally require more storage.
 </li><li>See <a href="advanced.html#large_objects">Large Objects</a> for information on
     <code>BINARY</code> vs. <code>BLOB</code>
@@ -749,7 +749,8 @@ The data is stored in the database as follows:
 </table>
 <p>
 Access by row id is fast because the data is sorted by this key.
-Please note the row id is not available until after the row was added (that means, it can not be used in computed columns or constraints).
+Please note the row id is not available until after the row was added
+(that means, it can not be used in generated columns or constraints).
 If the query condition does not contain the row id (and if no other index can be used), then all rows of the table are scanned.
 A table scan iterates over all rows in the table, in the order of the row id.
 To find out what strategy the database uses to retrieve the data, use <code>EXPLAIN SELECT</code>:

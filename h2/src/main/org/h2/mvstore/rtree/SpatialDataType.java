@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,14 +10,14 @@ import java.util.ArrayList;
 
 import org.h2.mvstore.DataUtils;
 import org.h2.mvstore.WriteBuffer;
-import org.h2.mvstore.type.DataType;
+import org.h2.mvstore.type.BasicDataType;
 
 /**
  * A spatial data type. This class supports up to 31 dimensions. Each dimension
  * can have a minimum and a maximum value of type float. For each dimension, the
  * maximum value is only stored when it is not the same as the minimum.
  */
-public class SpatialDataType implements DataType {
+public class SpatialDataType extends BasicDataType<Spatial> {
 
     private final int dimensions;
 
@@ -31,8 +31,24 @@ public class SpatialDataType implements DataType {
         this.dimensions = dimensions;
     }
 
+    /**
+     * Creates spatial object with specified parameters.
+     *
+     * @param id the ID
+     * @param minMax min x, max x, min y, max y, and so on
+     * @return the spatial object
+     */
+    protected Spatial create(long id, float... minMax) {
+        return new DefaultSpatial(id, minMax);
+    }
+
     @Override
-    public int compare(Object a, Object b) {
+    public Spatial[] createStorage(int size) {
+        return new Spatial[size];
+    }
+
+    @Override
+    public int compare(Spatial a, Spatial b) {
         if (a == b) {
             return 0;
         } else if (a == null) {
@@ -40,8 +56,8 @@ public class SpatialDataType implements DataType {
         } else if (b == null) {
             return 1;
         }
-        long la = ((SpatialKey) a).getId();
-        long lb = ((SpatialKey) b).getId();
+        long la = a.getId();
+        long lb = b.getId();
         return Long.compare(la, lb);
     }
 
@@ -58,33 +74,18 @@ public class SpatialDataType implements DataType {
         } else if (a == null || b == null) {
             return false;
         }
-        long la = ((SpatialKey) a).getId();
-        long lb = ((SpatialKey) b).getId();
+        long la = ((Spatial) a).getId();
+        long lb = ((Spatial) b).getId();
         return la == lb;
     }
 
     @Override
-    public int getMemory(Object obj) {
+    public int getMemory(Spatial obj) {
         return 40 + dimensions * 4;
     }
 
     @Override
-    public void read(ByteBuffer buff, Object[] obj, int len, boolean key) {
-        for (int i = 0; i < len; i++) {
-            obj[i] = read(buff);
-        }
-    }
-
-    @Override
-    public void write(WriteBuffer buff, Object[] obj, int len, boolean key) {
-        for (int i = 0; i < len; i++) {
-            write(buff, obj[i]);
-        }
-    }
-
-    @Override
-    public void write(WriteBuffer buff, Object obj) {
-        SpatialKey k = (SpatialKey) obj;
+    public void write(WriteBuffer buff, Spatial k) {
         if (k.isNull()) {
             buff.putVarInt(-1);
             buff.putVarLong(k.getId());
@@ -107,11 +108,11 @@ public class SpatialDataType implements DataType {
     }
 
     @Override
-    public Object read(ByteBuffer buff) {
+    public Spatial read(ByteBuffer buff) {
         int flags = DataUtils.readVarInt(buff);
         if (flags == -1) {
             long id = DataUtils.readVarLong(buff);
-            return new SpatialKey(id);
+            return create(id);
         }
         float[] minMax = new float[dimensions * 2];
         for (int i = 0; i < dimensions; i++) {
@@ -126,19 +127,17 @@ public class SpatialDataType implements DataType {
             minMax[i + i + 1] = max;
         }
         long id = DataUtils.readVarLong(buff);
-        return new SpatialKey(id, minMax);
+        return create(id, minMax);
     }
 
     /**
      * Check whether the two objects overlap.
      *
-     * @param objA the first object
-     * @param objB the second object
+     * @param a the first object
+     * @param b the second object
      * @return true if they overlap
      */
-    public boolean isOverlap(Object objA, Object objB) {
-        SpatialKey a = (SpatialKey) objA;
-        SpatialKey b = (SpatialKey) objB;
+    public boolean isOverlap(Spatial a, Spatial b) {
         if (a.isNull() || b.isNull()) {
             return false;
         }
@@ -157,8 +156,8 @@ public class SpatialDataType implements DataType {
      * @param add the value
      */
     public void increaseBounds(Object bounds, Object add) {
-        SpatialKey a = (SpatialKey) add;
-        SpatialKey b = (SpatialKey) bounds;
+        Spatial a = (Spatial) add;
+        Spatial b = (Spatial) bounds;
         if (a.isNull() || b.isNull()) {
             return;
         }
@@ -182,8 +181,8 @@ public class SpatialDataType implements DataType {
      * @return the area
      */
     public float getAreaIncrease(Object objA, Object objB) {
-        SpatialKey b = (SpatialKey) objB;
-        SpatialKey a = (SpatialKey) objA;
+        Spatial b = (Spatial) objB;
+        Spatial a = (Spatial) objA;
         if (a.isNull() || b.isNull()) {
             return 0;
         }
@@ -212,8 +211,8 @@ public class SpatialDataType implements DataType {
      * @return the area
      */
     float getCombinedArea(Object objA, Object objB) {
-        SpatialKey a = (SpatialKey) objA;
-        SpatialKey b = (SpatialKey) objB;
+        Spatial a = (Spatial) objA;
+        Spatial b = (Spatial) objB;
         if (a.isNull()) {
             return getArea(b);
         } else if (b.isNull()) {
@@ -228,7 +227,7 @@ public class SpatialDataType implements DataType {
         return area;
     }
 
-    private float getArea(SpatialKey a) {
+    private float getArea(Spatial a) {
         if (a.isNull()) {
             return 0;
         }
@@ -247,8 +246,8 @@ public class SpatialDataType implements DataType {
      * @return the area
      */
     public boolean contains(Object objA, Object objB) {
-        SpatialKey a = (SpatialKey) objA;
-        SpatialKey b = (SpatialKey) objB;
+        Spatial a = (Spatial) objA;
+        Spatial b = (Spatial) objB;
         if (a.isNull() || b.isNull()) {
             return false;
         }
@@ -269,8 +268,8 @@ public class SpatialDataType implements DataType {
      * @return true if a is completely inside b
      */
     public boolean isInside(Object objA, Object objB) {
-        SpatialKey a = (SpatialKey) objA;
-        SpatialKey b = (SpatialKey) objB;
+        Spatial a = (Spatial) objA;
+        Spatial b = (Spatial) objB;
         if (a.isNull() || b.isNull()) {
             return false;
         }
@@ -288,12 +287,12 @@ public class SpatialDataType implements DataType {
      * @param objA the object
      * @return the bounding box
      */
-    Object createBoundingBox(Object objA) {
-        SpatialKey a = (SpatialKey) objA;
+    Spatial createBoundingBox(Object objA) {
+        Spatial a = (Spatial) objA;
         if (a.isNull()) {
             return a;
         }
-        return new SpatialKey(0, a);
+        return a.clone(0);
     }
 
     /**
@@ -309,8 +308,8 @@ public class SpatialDataType implements DataType {
         if (list.isEmpty()) {
             return null;
         }
-        SpatialKey bounds = (SpatialKey) createBoundingBox(list.get(0));
-        SpatialKey boundsInner = (SpatialKey) createBoundingBox(bounds);
+        Spatial bounds = createBoundingBox(list.get(0));
+        Spatial boundsInner = createBoundingBox(bounds);
         for (int i = 0; i < dimensions; i++) {
             float t = boundsInner.min(i);
             boundsInner.setMin(i, boundsInner.max(i));
@@ -342,7 +341,7 @@ public class SpatialDataType implements DataType {
         int firstIndex = -1, lastIndex = -1;
         for (int i = 0; i < list.size() &&
                 (firstIndex < 0 || lastIndex < 0); i++) {
-            SpatialKey o = (SpatialKey) list.get(i);
+            Spatial o = (Spatial) list.get(i);
             if (firstIndex < 0 && o.max(bestDim) == min) {
                 firstIndex = i;
             } else if (lastIndex < 0 && o.min(bestDim) == max) {
@@ -355,7 +354,7 @@ public class SpatialDataType implements DataType {
     private static ArrayList<Object> getNotNull(ArrayList<Object> list) {
         boolean foundNull = false;
         for (Object o : list) {
-            SpatialKey a = (SpatialKey) o;
+            Spatial a = (Spatial) o;
             if (a.isNull()) {
                 foundNull = true;
                 break;
@@ -366,7 +365,7 @@ public class SpatialDataType implements DataType {
         }
         ArrayList<Object> result = new ArrayList<>();
         for (Object o : list) {
-            SpatialKey a = (SpatialKey) o;
+            Spatial a = (Spatial) o;
             if (!a.isNull()) {
                 result.add(a);
             }
@@ -375,8 +374,8 @@ public class SpatialDataType implements DataType {
     }
 
     private void increaseMaxInnerBounds(Object bounds, Object add) {
-        SpatialKey b = (SpatialKey) bounds;
-        SpatialKey a = (SpatialKey) add;
+        Spatial b = (Spatial) bounds;
+        Spatial a = (Spatial) add;
         for (int i = 0; i < dimensions; i++) {
             b.setMin(i, Math.min(b.min(i), a.max(i)));
             b.setMax(i, Math.max(b.max(i), a.min(i)));

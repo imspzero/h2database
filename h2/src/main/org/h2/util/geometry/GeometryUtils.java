@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -52,7 +52,8 @@ public final class GeometryUtils {
         }
 
         /**
-         * Invoked before writing a POLYGON.
+         * Invoked before writing a POLYGON. If polygon is empty, both
+         * parameters are 0.
          *
          * @param numInner
          *            number of inner polygons
@@ -571,12 +572,13 @@ public final class GeometryUtils {
 
     /**
      * Throw exception if param is not finite value (ie. NaN/inf/etc)
-     * @param d double value
-     * @return same double value
+     *
+     * @param d
+     *            a double value
+     * @return the same double value
      */
     static double checkFinite(double d) {
-        // Do not push this negation down, it will break NaN rejection
-        if (!(Math.abs(d) <= Double.MAX_VALUE)) {
+        if (!Double.isFinite(d)) {
             throw new IllegalArgumentException();
         }
         return d;

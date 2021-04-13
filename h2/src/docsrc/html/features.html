@@ -1,6 +1,6 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <!--
-Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
 and the EPL 1.0 (https://h2database.com/html/license.html).
 Initial Developer: H2 Group
 -->
@@ -67,8 +67,8 @@ Features
     Read Only Databases</a><br />
 <a href="#database_in_zip">
     Read Only Databases in Zip or Jar File</a><br />
-<a href="#computed_columns">
-    Computed Columns / Function Based Index</a><br />
+<a href="#generated_columns">
+    Generated Columns (Computed Columns) / Function Based Index</a><br />
 <a href="#multi_dimensional">
     Multi-Dimensional Indexes</a><br />
 <a href="#user_defined_functions">
@@ -100,8 +100,8 @@ Features
 <h3>Additional Features</h3>
 <ul>
 <li>Disk based or in-memory databases and tables, read-only database support, temporary tables
-</li><li>Transaction support (read committed), 2-phase-commit
-</li><li>Multiple connections, table level locking
+</li><li>Transaction support (read uncommitted, read committed, repeatable read, snapshot), 2-phase-commit
+</li><li>Multiple connections, row-level locking
 </li><li>Cost based optimizer, using a genetic algorithm for complex queries, zero-administration
 </li><li>Scrollable and updatable result set support, large result set, external result sorting,
     functions can return a result set
@@ -116,7 +116,7 @@ Features
 </li><li>Triggers and Java functions / stored procedures
 </li><li>Many built-in functions, including XML and lossless data compression
 </li><li>Wide range of data types including large objects (BLOB/CLOB) and arrays
-</li><li>Sequence and autoincrement columns, computed columns (can be used for function based indexes)
+</li><li>Sequences and identity columns, generated columns (can be used for function based indexes)
 </li><li>ORDER BY, GROUP BY, HAVING, UNION, OFFSET / FETCH (including PERCENT and WITH TIES), LIMIT, TOP,
     DISTINCT / DISTINCT ON (...)
 </li><li>Window functions
@@ -142,7 +142,7 @@ encrypted using the AES-128 encryption algorithm
 
 <h3>Other Features and Tools</h3>
 <ul>
-<li>Small footprint (around 2 MB), low memory requirements
+<li>Small footprint (around 2.5 MB), low memory requirements
 </li><li>Multiple index types (b-tree, tree, hash)
 </li><li>Support for multi-dimensional indexes
 </li><li>CSV (comma separated values) file support
@@ -183,6 +183,15 @@ The disadvantage is that a database may only be open in one virtual machine (and
 As in all modes, both persistent and in-memory databases are supported.
 There is no limit on the number of database open concurrently,
 or on the number of open connections.
+</p>
+<p>
+In embedded mode I/O operations can be performed by application's threads that execute a SQL command.
+The application may not interrupt these threads, it can lead to database corruption,
+because JVM closes I/O handle during thread interruption.
+Consider other ways to control execution of your application.
+When interrupts are possible the <a href="advanced.html#file_system"><code>async:</code></a>
+file system can be used as a workaround, but full safety is not guaranteed.
+It's recommended to use the client-server model instead, the client side may interrupt own threads.
 </p>
 <img src="images/connection-mode-embedded-2.png"
     width="208" height="259"
@@ -278,7 +287,7 @@ This is achieved using different database URLs. Settings in the URLs are not cas
 <tr>
     <td><a href="#database_file_locking">File locking methods</a></td>
     <td class="notranslate">
-        jdbc:h2:&lt;url&gt;;FILE_LOCK={FILE|SOCKET|NO}<br />
+        jdbc:h2:&lt;url&gt;;FILE_LOCK={FILE|SOCKET|FS|NO}<br />
         jdbc:h2:file:~/private;CIPHER=AES;FILE_LOCK=SOCKET<br />
     </td>
 </tr>
@@ -410,6 +419,8 @@ For an in-memory database, this means the content is lost.
 To keep the database open, add <code>;DB_CLOSE_DELAY=-1</code> to the database URL.
 To keep the content of an in-memory database as long as the virtual machine is alive, use
 <code>jdbc:h2:mem:test;DB_CLOSE_DELAY=-1</code>.
+This may create a memory leak, when you need to remove the database, use
+the <a href="commands.html#shutdown">SHUTDOWN</a> command.
 </p>
 
 <h2 id="file_encryption">Database Files Encryption</h2>
@@ -644,10 +655,6 @@ An application can use multiple threads that access the same database at the sam
 With default MVStore engine threads that use different connections can use the database concurrently.
 With PageStore engine requests to the same database are synchronized,
 that means that if one thread executes a long running query, the other threads need to wait.
-Concurrent database usage may be enabled for PageStore or disabled for MVStore
-with <code>MULTI_THREADED</code> setting.
-Note that multi-threaded mode for PageStore engine is not tested well and has some issues;
-it should be used with caution.
 </p>
 
 <h3>Locking, Lock-Timeout, Deadlocks</h3>
@@ -726,7 +733,41 @@ but does not issue them with default MVStore engine.
 
 <h2 id="database_file_layout">Database File Layout</h2>
 <p>
-The following files are created for persistent databases:
+The following files are created for persistent databases when the default MVStore engine is used:
+</p>
+<table class="main">
+<tr><th>File Name</th><th>Description</th><th>Number of Files</th></tr>
+<tr><td class="notranslate">
+    test.mv.db
+</td><td>
+    Database file.<br />
+    Contains the transaction log, indexes, and data for all tables.<br />
+    Format: <code>&lt;database&gt;.mv.db</code>
+</td><td>
+    1 per database
+</td></tr>
+<tr><td class="notranslate">
+    test.newFile
+</td><td>
+    Temporary file for database compaction.<br />
+    Contains the new MVStore file.<br />
+    Format: <code>&lt;database&gt;.newFile</code>
+</td><td>
+    0 or 1 per database
+</td></tr>
+<tr><td class="notranslate">
+    test.tempFile
+</td><td>
+    Temporary file for database compaction.<br />
+    Contains the temporary MVStore file.<br />
+    Format: <code>&lt;database&gt;.tempFile</code>
+</td><td>
+    0 or 1 per database
+</td></tr>
+</table>
+
+<p>
+The following file is created for persistent databases when PageStore engine is used:
 </p>
 <table class="main">
 <tr><th>File Name</th><th>Description</th><th>Number of Files</th></tr>
@@ -739,6 +780,13 @@ The following files are created for persistent databases:
 </td><td>
     1 per database
 </td></tr>
+</table>
+
+<p>
+The following files are created for persistent databases by both MVStore and PageStore engines:
+</p>
+<table class="main">
+<tr><th>File Name</th><th>Description</th><th>Number of Files</th></tr>
 <tr><td class="notranslate">
     test.lock.db
 </td><td>
@@ -754,18 +802,9 @@ The following files are created for persistent databases:
     Trace file (if the trace option is enabled).<br />
     Contains trace information.<br />
     Format: <code>&lt;database&gt;.trace.db</code><br />
-    Renamed to <code>&lt;database&gt;.trace.db.old</code> is too big.
+    Renamed to <code>&lt;database&gt;.trace.db.old</code> if too big.
 </td><td>
     0 or 1 per database
-</td></tr>
-<tr><td class="notranslate">
-    test.lobs.db/*
-</td><td>
-    Directory containing one file for each<br />
-    BLOB or CLOB value larger than a certain size.<br />
-    Format: <code>&lt;id&gt;.t&lt;tableId&gt;.lob.db</code>
-</td><td>
-    1 per large object
 </td></tr>
 <tr><td class="notranslate">
     test.123.temp.db
@@ -828,23 +867,22 @@ Here is the list of currently supported modes and the differences to the regular
 
 <h3>DB2 Compatibility Mode</h3>
 <p>
-To use the IBM DB2 mode, use the database URL <code>jdbc:h2:~/test;MODE=DB2</code>
+To use the IBM DB2 mode, use the database URL <code>jdbc:h2:~/test;MODE=DB2;DEFAULT_NULL_ORDERING=HIGH</code>
 or the SQL statement <code>SET MODE DB2</code>.
 </p>
 <ul><li>For aliased columns, <code>ResultSetMetaData.getColumnName()</code>
     returns the alias name and <code>getTableName()</code> returns
     <code>null</code>.
-</li><li>Concatenating <code>NULL</code> with another value
-    results in the other value.
 </li><li>Support the pseudo-table SYSIBM.SYSDUMMY1.
 </li><li>Timestamps with dash between date and time are supported.
 </li><li>Datetime value functions return the same value within a command.
 </li><li>Second and third arguments of TRANSLATE() function are swapped.
+</li><li>LIMIT / OFFSET clauses are supported.
 </li></ul>
 
 <h3>Derby Compatibility Mode</h3>
 <p>
-To use the Apache Derby mode, use the database URL <code>jdbc:h2:~/test;MODE=Derby</code>
+To use the Apache Derby mode, use the database URL <code>jdbc:h2:~/test;MODE=Derby;DEFAULT_NULL_ORDERING=HIGH</code>
 or the SQL statement <code>SET MODE Derby</code>.
 </p>
 <ul><li>For aliased columns, <code>ResultSetMetaData.getColumnName()</code>
@@ -852,26 +890,20 @@ or the SQL statement <code>SET MODE Derby</code>.
     <code>null</code>.
 </li><li>For unique indexes, <code>NULL</code> is distinct.
     That means only one row with <code>NULL</code> in one of the columns is allowed.
-</li><li>Concatenating <code>NULL</code> with another value
-    results in the other value.
 </li><li>Support the pseudo-table SYSIBM.SYSDUMMY1.
 </li><li>Datetime value functions return the same value within a command.
 </li></ul>
 
 <h3>HSQLDB Compatibility Mode</h3>
 <p>
-To use the HSQLDB mode, use the database URL <code>jdbc:h2:~/test;MODE=HSQLDB</code>
+To use the HSQLDB mode, use the database URL <code>jdbc:h2:~/test;MODE=HSQLDB;DEFAULT_NULL_ORDERING=FIRST</code>
 or the SQL statement <code>SET MODE HSQLDB</code>.
 </p>
-<ul><li>For aliased columns, <code>ResultSetMetaData.getColumnName()</code>
-    returns the alias name and <code>getTableName()</code> returns
-    <code>null</code>.
-</li><li>When converting the scale of decimal data, the number is only converted if the new scale is
-    smaller than the current scale. Usually, the scale is converted and 0s are added if required.
-</li><li>For unique indexes, <code>NULL</code> is distinct.
-    That means only one row with <code>NULL</code> in one of the columns is allowed.
-</li><li>Text can be concatenated using '+'.
+<ul><li>Text can be concatenated using '+'.
+</li><li>NULL value works like DEFAULT value is assignments to identity columns.
 </li><li>Datetime value functions return the same value within a command.
+</li><li>TOP clause in SELECT is supported.
+</li><li>LIMIT / OFFSET clauses are supported.
 </li></ul>
 
 <h3>MS SQL Server Compatibility Mode</h3>
@@ -885,8 +917,6 @@ or the SQL statement <code>SET MODE MSSQLServer</code>.
 </li><li>Identifiers may be quoted using square brackets as in <code>[Test]</code>.
 </li><li>For unique indexes, <code>NULL</code> is distinct.
     That means only one row with <code>NULL</code> in one of the columns is allowed.
-</li><li>Concatenating <code>NULL</code> with another value
-    results in the other value.
 </li><li>Text can be concatenated using '+'.
 </li><li>Arguments of LOG() function are swapped.
 </li><li>MONEY data type is treated like NUMERIC(19, 4) data type. SMALLMONEY data type is treated like NUMERIC(10, 4)
@@ -895,12 +925,13 @@ or the SQL statement <code>SET MODE MSSQLServer</code>.
 </li><li>Table hints are discarded. Example: <code>SELECT * FROM table WITH (NOLOCK)</code>.
 </li><li>Datetime value functions return the same value within a command.
 </li><li>0x literals are parsed as binary string literals.
+</li><li>TRUNCATE TABLE restarts next values of generated columns.
+</li><li>TOP clause in SELECT, UPDATE, and DELETE is supported.
 </li></ul>
 
-<h3>MySQL Compatibility Mode</h3>
+<h3>MariaDB Compatibility Mode</h3>
 <p>
-To use the MySQL mode, use the database URL <code>jdbc:h2:~/test;MODE=MySQL;DATABASE_TO_LOWER=TRUE</code>.
-Use this mode for compatibility with MariaDB too.
+To use the MariaDB mode, use the database URL <code>jdbc:h2:~/test;MODE=MariaDB;DATABASE_TO_LOWER=TRUE</code>.
 When case-insensitive identifiers are needed append <code>;CASE_INSENSITIVE_IDENTIFIERS=TRUE</code> to URL.
 Do not change value of DATABASE_TO_LOWER after creation of database.
 </p>
@@ -909,16 +940,66 @@ Do not change value of DATABASE_TO_LOWER after creation of database.
     Example: <code>create table test(id int primary key, name varchar(255), key idx_name(name));</code>
 </li><li>When converting a floating point number to an integer, the fractional
     digits are not truncated, but the value is rounded.
-</li><li>Concatenating <code>NULL</code> with another value
-    results in the other value.
 </li><li>ON DUPLICATE KEY UPDATE is supported in INSERT statements, due to this feature VALUES has special non-standard
     meaning is some contexts.
 </li><li>INSERT IGNORE is partially supported and may be used to skip rows with duplicate keys if ON DUPLICATE KEY
     UPDATE is not specified.
-</li><li>REGEXP_REPLACE() uses \ for back-references for compatibility with MariaDB.
+</li><li>REPLACE INTO is partially supported.
+</li><li>Spaces are trimmed from the right side of CHAR values.
+</li><li>REGEXP_REPLACE() uses \ for back-references.
 </li><li>Datetime value functions return the same value within a command.
 </li><li>0x literals are parsed as binary string literals.
 </li><li>Unrelated expressions in ORDER BY clause of DISTINCT queries are allowed.
+</li><li>Some MariaDB-specific ALTER TABLE commands are partially supported.
+</li><li>TRUNCATE TABLE restarts next values of generated columns.
+</li><li>NEXT VALUE FOR returns different values when invoked multiple times within the same row.
+</li><li>If value of an identity column was manually specified, its sequence is updated to generate values after
+inserted.
+</li><li>NULL value works like DEFAULT value is assignments to identity columns.
+</li><li>LIMIT / OFFSET clauses are supported.
+</li><li>AUTO_INCREMENT clause can be used.
+</li><li>YEAR data type is treated like SMALLINT data type.
+</li><li>GROUP BY clause can contain 1-based positions of expressions from the SELECT list.
+</li></ul>
+<p>
+Text comparison in MariaDB is case insensitive by default, while in H2 it is case sensitive (as in most other databases).
+H2 does support case insensitive text comparison, but it needs to be set separately,
+using <code>SET IGNORECASE TRUE</code>.
+This affects comparison using <code>=, LIKE, REGEXP</code>.
+</p>
+
+<h3>MySQL Compatibility Mode</h3>
+<p>
+To use the MySQL mode, use the database URL <code>jdbc:h2:~/test;MODE=MySQL;DATABASE_TO_LOWER=TRUE</code>.
+When case-insensitive identifiers are needed append <code>;CASE_INSENSITIVE_IDENTIFIERS=TRUE</code> to URL.
+Do not change value of DATABASE_TO_LOWER after creation of database.
+</p>
+<ul><li>Creating indexes in the <code>CREATE TABLE</code> statement is allowed using
+    <code>INDEX(..)</code> or <code>KEY(..)</code>.
+    Example: <code>create table test(id int primary key, name varchar(255), key idx_name(name));</code>
+</li><li>When converting a floating point number to an integer, the fractional
+    digits are not truncated, but the value is rounded.
+</li><li>ON DUPLICATE KEY UPDATE is supported in INSERT statements, due to this feature VALUES has special non-standard
+    meaning is some contexts.
+</li><li>INSERT IGNORE is partially supported and may be used to skip rows with duplicate keys if ON DUPLICATE KEY
+    UPDATE is not specified.
+</li><li>REPLACE INTO is partially supported.
+</li><li>Spaces are trimmed from the right side of CHAR values.
+</li><li>REGEXP_REPLACE() uses \ for back-references.
+</li><li>Datetime value functions return the same value within a command.
+</li><li>0x literals are parsed as binary string literals.
+</li><li>Unrelated expressions in ORDER BY clause of DISTINCT queries are allowed.
+</li><li>Some MySQL-specific ALTER TABLE commands are partially supported.
+</li><li>TRUNCATE TABLE restarts next values of generated columns.
+</li><li>If value of an identity column was manually specified, its sequence is updated to generate values after
+inserted.
+</li><li>NULL value works like DEFAULT value is assignments to identity columns.
+</li><li>Referential constraints don't require an existing primary key or unique constraint on referenced columns
+and create a unique constraint automatically if such constraint doesn't exist.
+</li><li>LIMIT / OFFSET clauses are supported.
+</li><li>AUTO_INCREMENT clause can be used.
+</li><li>YEAR data type is treated like SMALLINT data type.
+</li><li>GROUP BY clause can contain 1-based positions of expressions from the SELECT list.
 </li></ul>
 <p>
 Text comparison in MySQL is case insensitive by default, while in H2 it is case sensitive (as in most other databases).
@@ -929,7 +1010,7 @@ This affects comparison using <code>=, LIKE, REGEXP</code>.
 
 <h3>Oracle Compatibility Mode</h3>
 <p>
-To use the Oracle mode, use the database URL <code>jdbc:h2:~/test;MODE=Oracle</code>
+To use the Oracle mode, use the database URL <code>jdbc:h2:~/test;MODE=Oracle;DEFAULT_NULL_ORDERING=HIGH</code>
 or the SQL statement <code>SET MODE Oracle</code>.
 </p>
 <ul><li>For aliased columns, <code>ResultSetMetaData.getColumnName()</code>
@@ -938,17 +1019,22 @@ or the SQL statement <code>SET MODE Oracle</code>.
 </li><li>When using unique indexes, multiple rows with <code>NULL</code>
     in all columns are allowed, however it is not allowed to have multiple rows with the
     same values otherwise.
-</li><li>Concatenating <code>NULL</code> with another value
+</li><li>Empty strings are treated like <code>NULL</code> values, concatenating <code>NULL</code> with another value
     results in the other value.
-</li><li>Empty strings are treated like <code>NULL</code> values.
 </li><li>REGEXP_REPLACE() uses \ for back-references.
+</li><li>RAWTOHEX() converts character strings to hexadecimal representation of their UTF-8 encoding.
+</li><li>HEXTORAW() decodes a hexadecimal character string to a binary string.
 </li><li>DATE data type is treated like TIMESTAMP(0) data type.
 </li><li>Datetime value functions return the same value within a command.
+</li><li>ALTER TABLE MODIFY COLUMN command is partially supported.
+</li><li>SEQUENCE.NEXTVAL and SEQUENCE.CURRVAL are supported and return values with DECIMAL/NUMERIC data type.
+</li><li>Merge when matched clause may have WHERE clause.
 </li></ul>
 
 <h3>PostgreSQL Compatibility Mode</h3>
 <p>
-To use the PostgreSQL mode, use the database URL <code>jdbc:h2:~/test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE</code>.
+To use the PostgreSQL mode, use the database URL
+<code>jdbc:h2:~/test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH</code>.
 Do not change value of DATABASE_TO_LOWER after creation of database.
 </p>
 <ul><li>For aliased columns, <code>ResultSetMetaData.getColumnName()</code>
@@ -956,8 +1042,8 @@ Do not change value of DATABASE_TO_LOWER after creation of database.
     <code>null</code>.
 </li><li>When converting a floating point number to an integer, the fractional
     digits are not be truncated, but the value is rounded.
-</li><li>The system columns <code>CTID</code> and
-    <code>OID</code> are supported.
+</li><li>The system columns <code>ctid</code> and
+    <code>oid</code> are supported.
 </li><li>LOG(x) is base 10 in this mode.
 </li><li>REGEXP_REPLACE():
     <ul>
@@ -965,23 +1051,17 @@ Do not change value of DATABASE_TO_LOWER after creation of database.
     <li>does not throw an exception when the <code>flagsString</code> parameter contains a 'g';</li>
     <li>replaces only the first matched substring in the absence of the 'g' flag in the <code>flagsString</code> parameter.</li>
     </ul>
-</li><li>Fixed-width strings are padded with spaces.
+</li><li>LIMIT / OFFSET clauses are supported.
+</li><li>Legacy SERIAL and BIGSERIAL data types are supported.
+</li><li>ON CONFLICT DO NOTHING is supported in INSERT statements.
+</li><li>Spaces are trimmed from the right side of CHAR values, but CHAR values in result sets are right-padded with
+    spaces to the declared length.
 </li><li>MONEY data type is treated like NUMERIC(19, 2) data type.
 </li><li>Datetime value functions return the same value within a transaction.
 </li><li>ARRAY_SLICE() out of bounds parameters are silently corrected.
 </li><li>EXTRACT function with DOW field returns (0-6), Sunday is 0.
-</li></ul>
-
-<h3>Ignite Compatibility Mode</h3>
-<p>
-To use the Ignite mode, use the database URL <code>jdbc:h2:~/test;MODE=Ignite</code>
-or the SQL statement <code>SET MODE Ignite</code>.
-</p>
-<ul><li>Creating indexes in the <code>CREATE TABLE</code> statement is allowed using
-    <code>INDEX(..)</code> or <code>KEY(..)</code>.
-    Example: <code>create table test(id int primary key, name varchar(255), key idx_name(name));</code>
-</li><li>AFFINITY KEY and SHARD KEY keywords may be used in index definition.
-</li><li>Datetime value functions return the same value within a transaction.
+</li><li>UPDATE with FROM is supported.
+</li><li>GROUP BY clause can contain 1-based positions of expressions from the SELECT list.
 </li></ul>
 
 <h2 id="auto_reconnect">Auto-Reconnect</h2>
@@ -1054,10 +1134,11 @@ The port can be set manually using <code>AUTO_SERVER_PORT=9090</code>.
 
 <h2 id="page_size">Page Size</h2>
 <p>
-The page size for new databases is 2 KB (2048), unless the page size is set
+The page size for new databases is 4 KiB (4096 bytes), unless the page size is set
 explicitly in the database URL using <code>PAGE_SIZE=</code> when
 the database is created. The page size of existing databases can not be changed,
 so this property needs to be set when the database is created.
+The page size of encrypted databases must be a multiple of 4096 (4096, 8192, &#8230;).
 </p>
 
 <h2 id="trace_options">Using the Trace Options</h2>
@@ -1222,26 +1303,32 @@ is corrupted, then the database can be opened by specifying a database event lis
 The exceptions are logged, but opening the database will continue.
 </p>
 
-<h2 id="computed_columns">Computed Columns / Function Based Index</h2>
+<h2 id="generated_columns">Generated Columns (Computed Columns) / Function Based Index</h2>
 <p>
-A computed column is a column whose value is calculated before storing.
+Each column is either a base column or a generated column.
+A generated column is a column whose value is calculated before storing and cannot be assigned directly.
 The formula is evaluated when the row is inserted, and re-evaluated every time the row is updated.
 One use case is to automatically update the last-modification time:
 </p>
 <pre>
-CREATE TABLE TEST(ID INT, NAME VARCHAR, LAST_MOD TIMESTAMP AS NOW());
+CREATE TABLE TEST(
+    ID INT,
+    NAME VARCHAR,
+    LAST_MOD TIMESTAMP WITH TIME ZONE
+        GENERATED ALWAYS AS CURRENT_TIMESTAMP
+);
 </pre>
 <p>
 Function indexes are not directly supported by this database, but they can be emulated
-by using computed columns. For example, if an index on the upper-case version of
-a column is required, create a computed column with the upper-case version of the original column,
+by using generated columns. For example, if an index on the upper-case version of
+a column is required, create a generated column with the upper-case version of the original column,
 and create an index for this column:
 </p>
 <pre>
 CREATE TABLE ADDRESS(
     ID INT PRIMARY KEY,
     NAME VARCHAR,
-    UPPER_NAME VARCHAR AS UPPER(NAME)
+    UPPER_NAME VARCHAR GENERATED ALWAYS AS UPPER(NAME)
 );
 CREATE INDEX IDX_U_NAME ON ADDRESS(UPPER_NAME);
 </pre>
@@ -1266,7 +1353,7 @@ This value specifies the location on a space-filling curve.
 Currently, Z-order (also called N-order or Morton-order) is used;
 Hilbert curve could also be used, but the implementation is more complex.
 The algorithm to convert the multi-dimensional value is called bit-interleaving.
-The scalar value is indexed using a B-Tree index (usually using a computed column).
+The scalar value is indexed using a B-Tree index (usually using a generated column).
 </p><p>
 The method can result in a drastic performance improvement
 over just using an index on the first column. Depending on the
@@ -1316,18 +1403,20 @@ For a complete sample application, see <code>src/test/org/h2/samples/Function.ja
 <h3>Declaring Functions as Source Code</h3>
 <p>
 When defining a function alias with source code, the database tries to compile
-the source code using the Sun Java compiler (the class <code>com.sun.tools.javac.Main</code>)
-if the <code>tools.jar</code> is in the classpath. If not, <code>javac</code> is run as a separate process.
+the source code using the Java compiler (the class <code>javax.tool.ToolProvider.getSystemJavaCompiler()</code>)
+if it is in the classpath. If not, <code>javac</code> is run as a separate process.
 Only the source code is stored in the database; the class is compiled each time the database is re-opened.
-Source code is usually passed as dollar quoted text to avoid escaping problems, however single quotes can be used as well.
+Source code can be passed as dollar quoted text (<code>$$source code$$</code>) to avoid escaping problems.
+If you use some third-party script processing tool, use standard single quotes instead and don't forget to repeat
+each single quotation mark twice within the source code.
 Example:
 </p>
 <pre>
-CREATE ALIAS NEXT_PRIME AS $$
+CREATE ALIAS NEXT_PRIME AS '
 String nextPrime(String value) {
     return new BigInteger(value).nextProbablePrime().toString();
 }
-$$;
+';
 </pre>
 <p>
 By default, the three packages <code>java.util, java.math, java.sql</code> are imported.
@@ -1337,13 +1426,13 @@ If different import statements are required, they must be declared at the beginn
 and separated with the tag <code>@CODE</code>:
 </p>
 <pre>
-CREATE ALIAS IP_ADDRESS AS $$
+CREATE ALIAS IP_ADDRESS AS '
 import java.net.*;
 @CODE
 String ipAddress(String host) throws Exception {
     return InetAddress.getByName(host).getHostAddress();
 }
-$$;
+';
 </pre>
 <p>
 The following template is used to create a complete Java class:
@@ -1623,7 +1712,7 @@ even if the cache size setting stored in the database is larger; however the set
 is kept. Setting the cache size in the database URL or explicitly using <code>SET CACHE_SIZE</code>
 overrides this value (even if larger than the physical memory).
 To get the current used maximum cache size, use the query
-<code>SELECT * FROM INFORMATION_SCHEMA.SETTINGS WHERE NAME = 'info.CACHE_MAX_SIZE'</code>
+<code>SELECT * FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'info.CACHE_MAX_SIZE'</code>
 </p><p>
 An experimental scan-resistant cache algorithm "Two Queue" (2Q) is available.
 To enable it, append <code>;CACHE_TYPE=TQ</code> to the database URL.

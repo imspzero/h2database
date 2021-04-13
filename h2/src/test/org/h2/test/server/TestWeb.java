@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,7 +15,6 @@ import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -26,6 +25,8 @@ import javax.servlet.AsyncContext;
 import javax.servlet.DispatcherType;
 import javax.servlet.RequestDispatcher;
 import javax.servlet.ServletConfig;
+import javax.servlet.ServletContext;
+import javax.servlet.ServletException;
 import javax.servlet.ServletInputStream;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.ServletRequest;
@@ -37,8 +38,6 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpUpgradeHandler;
 import javax.servlet.http.Part;
-import javax.servlet.ServletContext;
-import javax.servlet.ServletException;
 
 import org.h2.api.ErrorCode;
 import org.h2.engine.Constants;
@@ -47,10 +46,10 @@ import org.h2.server.web.WebServlet;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
-import org.h2.test.utils.AssertThrows;
 import org.h2.tools.Server;
 import org.h2.util.StringUtils;
 import org.h2.util.Task;
+import org.h2.util.Utils10;
 
 /**
  * Tests the H2 Console application.
@@ -65,7 +64,7 @@ public class TestWeb extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -84,8 +83,6 @@ public class TestWeb extends TestDb {
         WebServlet servlet = new WebServlet();
         final HashMap<String, String> configMap = new HashMap<>();
         configMap.put("ifExists", "");
-        configMap.put("", "");
-        configMap.put("", "");
         configMap.put("", "");
         ServletConfig config = new ServletConfig() {
 
@@ -123,22 +120,10 @@ public class TestWeb extends TestDb {
         servlet.destroy();
     }
 
-    private static void testWrongParameters() {
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createPgServer("-pgPort 8182");
-        }};
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createTcpServer("-tcpPort 8182");
-        }};
-        new AssertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1) {
-            @Override
-            public void test() throws SQLException {
-                Server.createWebServer("-webPort=8182");
-        }};
+    private void testWrongParameters() {
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createPgServer("-pgPort 8182"));
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createTcpServer("-tcpPort 8182"));
+        assertThrows(ErrorCode.FEATURE_NOT_SUPPORTED_1, () -> Server.createWebServer("-webPort=8182"));
     }
 
     private void testAlreadyRunning() throws Exception {
@@ -450,8 +435,23 @@ public class TestWeb extends TestDb {
             result = client.get(url, "query.do?sql=@cancel");
             assertContains(result, "There is currently no running statement");
             result = client.get(url,
-                    "query.do?sql=@generated insert into test(id) values(test_sequence.nextval)");
+                    "query.do?sql=@generated insert into test(id) values(next value for test_sequence)");
             assertContains(result, "<tr><th>ID</th></tr><tr><td>1</td></tr>");
+            result = client.get(url,
+                    "query.do?sql=@generated(1) insert into test(id) values(next value for test_sequence)");
+            assertContains(result, "<tr><th>ID</th></tr><tr><td>2</td></tr>");
+            result = client.get(url,
+                    "query.do?sql=@generated(1, 1) insert into test(id) values(next value for test_sequence)");
+            assertContains(result, "<tr><th>ID</th><th>ID</th></tr><tr><td>3</td><td>3</td></tr>");
+            result = client.get(url,
+                    "query.do?sql=@generated(id) insert into test(id) values(next value for test_sequence)");
+            assertContains(result, "<tr><th>ID</th></tr><tr><td>4</td></tr>");
+            result = client.get(url,
+                    "query.do?sql=@generated(id, id) insert into test(id) values(next value for test_sequence)");
+            assertContains(result, "<tr><th>ID</th><th>ID</th></tr><tr><td>5</td><td>5</td></tr>");
+            result = client.get(url,
+                    "query.do?sql=@generated() insert into test(id) values(next value for test_sequence)");
+            assertContains(result, "<table class=\"resultSet\" cellspacing=\"0\" cellpadding=\"0\"><tr></tr></table>");
             result = client.get(url, "query.do?sql=@maxrows 2000");
             assertContains(result, "Max rowcount is set");
             result = client.get(url, "query.do?sql=@password_hash user password");
@@ -461,20 +461,15 @@ public class TestWeb extends TestDb {
             assertContains(result, "Ok");
             result = client.get(url, "query.do?sql=@catalogs");
             assertContains(result, "PUBLIC");
-            result = client.get(url,
-                    "query.do?sql=@column_privileges null null null TEST null");
+            result = client.get(url, "query.do?sql=@column_privileges null null TEST null");
             assertContains(result, "PRIVILEGE");
-            result = client.get(url,
-                    "query.do?sql=@cross_references null null null TEST");
+            result = client.get(url, "query.do?sql=@cross_references null null TEST null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@exported_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@exported_keys null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@imported_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@imported_keys null null TEST");
             assertContains(result, "PKTABLE_NAME");
-            result = client.get(url,
-                    "query.do?sql=@primary_keys null null null TEST");
+            result = client.get(url, "query.do?sql=@primary_keys null null TEST");
             assertContains(result, "PK_NAME");
             result = client.get(url, "query.do?sql=@procedures null null null");
             assertContains(result, "PROCEDURE_NAME");
@@ -485,23 +480,22 @@ public class TestWeb extends TestDb {
             result = client.get(url, "query.do?sql=@table_privileges");
             assertContains(result, "PRIVILEGE");
             result = client.get(url, "query.do?sql=@table_types");
-            assertContains(result, "SYSTEM TABLE");
+            assertContains(result, "BASE TABLE");
             result = client.get(url, "query.do?sql=@type_info");
-            assertContains(result, "CLOB");
+            assertContains(result, "CHARACTER LARGE OBJECT");
             result = client.get(url, "query.do?sql=@version_columns");
             assertContains(result, "PSEUDO_COLUMN");
             result = client.get(url, "query.do?sql=@attributes");
-            assertContains(result, "Feature not supported: &quot;attributes&quot;");
+            assertContains(result, "ATTR_NAME");
             result = client.get(url, "query.do?sql=@super_tables");
             assertContains(result, "SUPERTABLE_NAME");
             result = client.get(url, "query.do?sql=@super_types");
-            assertContains(result, "Feature not supported: &quot;superTypes&quot;");
+            assertContains(result, "SUPERTYPE_NAME");
             result = client.get(url, "query.do?sql=@prof_start");
             assertContains(result, "Ok");
             result = client.get(url, "query.do?sql=@prof_stop");
             assertContains(result, "Top Stack Trace(s)");
-            result = client.get(url,
-                    "query.do?sql=@best_row_identifier null null TEST");
+            result = client.get(url, "query.do?sql=@best_row_identifier null null TEST");
             assertContains(result, "SCOPE");
             assertContains(result, "COLUMN_NAME");
             assertContains(result, "ID");
@@ -725,7 +719,7 @@ public class TestWeb extends TestDb {
 
         @Override
         public String getScheme() {
-            return null;
+            return "http";
         }
 
         @Override
@@ -735,7 +729,7 @@ public class TestWeb extends TestDb {
 
         @Override
         public int getServerPort() {
-            return 0;
+            return 80;
         }
 
         @Override
@@ -1180,7 +1174,7 @@ public class TestWeb extends TestDb {
 
         @Override
         public String toString() {
-            return new String(buff.toByteArray(), StandardCharsets.UTF_8);
+            return Utils10.byteArrayOutputStreamToString(buff, StandardCharsets.UTF_8);
         }
 
         @Override

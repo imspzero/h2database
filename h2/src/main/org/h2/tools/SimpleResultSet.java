@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -31,7 +31,6 @@ import java.util.Calendar;
 import java.util.Map;
 import java.util.UUID;
 import org.h2.api.ErrorCode;
-import org.h2.jdbc.JdbcResultSetBackwardsCompat;
 import org.h2.message.DbException;
 import org.h2.util.Bits;
 import org.h2.util.JdbcUtils;
@@ -39,6 +38,8 @@ import org.h2.util.MathUtils;
 import org.h2.util.SimpleColumnInfo;
 import org.h2.util.Utils;
 import org.h2.value.DataType;
+import org.h2.value.Value;
+import org.h2.value.ValueToObjectConverter;
 
 /**
  * This class is a simple result set and meta data implementation.
@@ -58,8 +59,7 @@ import org.h2.value.DataType;
  * </pre>
  *
  */
-public class SimpleResultSet implements ResultSet, ResultSetMetaData,
-        JdbcResultSetBackwardsCompat {
+public class SimpleResultSet implements ResultSet, ResultSetMetaData {
 
     private ArrayList<Object[]> rows;
     private Object[] currentRow;
@@ -99,8 +99,7 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData,
      */
     public void addColumn(String name, int sqlType, int precision, int scale) {
         int valueType = DataType.convertSQLTypeToValueType(sqlType);
-        addColumn(name, sqlType, DataType.getDataType(valueType).name,
-                precision, scale);
+        addColumn(name, sqlType, Value.getTypeName(valueType), precision, scale);
     }
 
     /**
@@ -840,48 +839,48 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData,
      * @param type the class of the returned value
      * @return the value
      */
+    @SuppressWarnings("unchecked")
     @Override
     public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-        if (wasNull()) {
+        if (get(columnIndex) == null) {
             return null;
         }
-
         if (type == BigDecimal.class) {
-            return type.cast(getBigDecimal(columnIndex));
+            return (T) getBigDecimal(columnIndex);
         } else if (type == BigInteger.class) {
-            return type.cast(getBigDecimal(columnIndex).toBigInteger());
+            return (T) getBigDecimal(columnIndex).toBigInteger();
         } else if (type == String.class) {
-            return type.cast(getString(columnIndex));
+            return (T) getString(columnIndex);
         } else if (type == Boolean.class) {
-            return type.cast(getBoolean(columnIndex));
+            return (T) (Boolean) getBoolean(columnIndex);
         } else if (type == Byte.class) {
-            return type.cast(getByte(columnIndex));
+            return (T) (Byte) getByte(columnIndex);
         } else if (type == Short.class) {
-            return type.cast(getShort(columnIndex));
+            return (T) (Short) getShort(columnIndex);
         } else if (type == Integer.class) {
-            return type.cast(getInt(columnIndex));
+            return (T) (Integer) getInt(columnIndex);
         } else if (type == Long.class) {
-            return type.cast(getLong(columnIndex));
+            return (T) (Long) getLong(columnIndex);
         } else if (type == Float.class) {
-            return type.cast(getFloat(columnIndex));
+            return (T) (Float) getFloat(columnIndex);
         } else if (type == Double.class) {
-            return type.cast(getDouble(columnIndex));
+            return (T) (Double) getDouble(columnIndex);
         } else if (type == Date.class) {
-            return type.cast(getDate(columnIndex));
+            return (T) getDate(columnIndex);
         } else if (type == Time.class) {
-            return type.cast(getTime(columnIndex));
+            return (T) getTime(columnIndex);
         } else if (type == Timestamp.class) {
-            return type.cast(getTimestamp(columnIndex));
+            return (T) getTimestamp(columnIndex);
         } else if (type == UUID.class) {
-            return type.cast(getObject(columnIndex));
+            return (T) getObject(columnIndex);
         } else if (type == byte[].class) {
-            return type.cast(getBytes(columnIndex));
+            return (T) getBytes(columnIndex);
         } else if (type == java.sql.Array.class) {
-            return type.cast(getArray(columnIndex));
+            return (T) getArray(columnIndex);
         } else if (type == Blob.class) {
-            return type.cast(getBlob(columnIndex));
+            return (T) getBlob(columnIndex);
         } else if (type == Clob.class) {
-            return type.cast(getClob(columnIndex));
+            return (T) getClob(columnIndex);
         } else {
             throw getUnsupportedException();
         }
@@ -2003,7 +2002,7 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData,
     @Override
     public String getColumnClassName(int columnIndex) throws SQLException {
         int type = DataType.getValueTypeFromResultSet(this, columnIndex);
-        return DataType.getTypeClassName(type, true);
+        return ValueToObjectConverter.getDefaultClass(type, true).getName();
     }
 
     /**
@@ -2204,7 +2203,7 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData,
      */
     @Override
     public boolean rowUpdated() throws SQLException {
-        throw getUnsupportedException();
+        return true;
     }
 
     /**
@@ -2317,19 +2316,33 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData,
     }
 
     /**
-     * INTERNAL
+     * Return an object of this class if possible.
+     *
+     * @param iface the class
+     * @return this
      */
     @Override
+    @SuppressWarnings("unchecked")
     public <T> T unwrap(Class<T> iface) throws SQLException {
-        throw getUnsupportedException();
+        try {
+            if (isWrapperFor(iface)) {
+                return (T) this;
+            }
+            throw DbException.getInvalidValueException("iface", iface);
+        } catch (Exception e) {
+            throw DbException.toSQLException(e);
+        }
     }
 
     /**
-     * INTERNAL
+     * Checks if unwrap can return an object of this class.
+     *
+     * @param iface the class
+     * @return whether or not the interface is assignable from this class
      */
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
-        throw getUnsupportedException();
+        return iface != null && iface.isAssignableFrom(getClass());
     }
 
     /**

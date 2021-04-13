@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -11,9 +11,9 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Random;
-
 import org.h2.mvstore.Chunk;
 import org.h2.mvstore.DataUtils;
+import org.h2.mvstore.MVStoreException;
 import org.h2.mvstore.WriteBuffer;
 import org.h2.test.TestBase;
 
@@ -28,7 +28,7 @@ public class TestDataUtils extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -143,7 +143,7 @@ public class TestDataUtils extends TestBase {
                 HashMap<String, String> map = DataUtils.parseMap(buff.toString());
                 assertNotNull(map);
                 // ok
-            } catch (IllegalStateException e) {
+            } catch (MVStoreException e) {
                 // ok - but not another exception
             }
         }

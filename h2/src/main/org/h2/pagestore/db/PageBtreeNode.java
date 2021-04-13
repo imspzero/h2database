@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,7 +7,7 @@ package org.h2.pagestore.db;
 
 import org.h2.api.DatabaseEventListener;
 import org.h2.api.ErrorCode;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.engine.SysProperties;
 import org.h2.message.DbException;
 import org.h2.pagestore.Page;
@@ -84,7 +84,7 @@ public class PageBtreeNode extends PageBtree {
         p.writeHead();
         // 4 bytes for the rightmost child page id
         p.start = p.data.length() + 4;
-        p.rows = SearchRow.EMPTY_ARRAY;
+        p.rows = PageStoreRow.EMPTY_SEARCH_ARRAY;
         if (p.pageStoreInternalCount) {
             p.rowCount = 0;
         }
@@ -107,8 +107,13 @@ public class PageBtreeNode extends PageBtree {
         entryCount = data.readShortInt();
         childPageIds = new int[entryCount + 1];
         childPageIds[entryCount] = data.readInt();
-        rows = entryCount == 0 ? SearchRow.EMPTY_ARRAY : new SearchRow[entryCount];
-        offsets = Utils.newIntArray(entryCount);
+        if (entryCount == 0) {
+            rows = PageStoreRow.EMPTY_SEARCH_ARRAY;
+            offsets = Utils.EMPTY_INT_ARRAY;
+        } else {
+            rows = new SearchRow[entryCount];
+            offsets = new int[entryCount];
+        }
         for (int i = 0; i < entryCount; i++) {
             childPageIds[i] = data.readInt();
             offsets[i] = data.readShortInt();
@@ -137,7 +142,7 @@ public class PageBtreeNode extends PageBtree {
             // more space) - and removing a child can't split this page
             startData = entryCount + 1 * MAX_KEY_LENGTH;
         } else {
-            int rowLength = index.getRowSize(data, row, onlyPosition);
+            int rowLength = index.getRowSize(row, onlyPosition);
             int pageSize = index.getPageStore().getPageSize();
             int last = entryCount == 0 ? pageSize : offsets[entryCount - 1];
             startData = last - rowLength;
@@ -157,7 +162,7 @@ public class PageBtreeNode extends PageBtree {
      *            children
      */
     private void addChild(int x, int childPageId, SearchRow row) {
-        int rowLength = index.getRowSize(data, row, onlyPosition);
+        int rowLength = index.getRowSize(row, onlyPosition);
         int pageSize = index.getPageStore().getPageSize();
         int last = entryCount == 0 ? pageSize : offsets[entryCount - 1];
         if (last - rowLength < start + CHILD_OFFSET_PAIR_LENGTH) {
@@ -166,13 +171,13 @@ public class PageBtreeNode extends PageBtree {
             // change the offsets (now storing only positions)
             int o = pageSize;
             for (int i = 0; i < entryCount; i++) {
-                o -= index.getRowSize(data, getRow(i), true);
+                o -= index.getRowSize(getRow(i), true);
                 offsets[i] = o;
             }
             last = entryCount == 0 ? pageSize : offsets[entryCount - 1];
-            rowLength = index.getRowSize(data, row, true);
+            rowLength = index.getRowSize(row, true);
             if (last - rowLength < start + CHILD_OFFSET_PAIR_LENGTH) {
-                throw DbException.throwInternalError();
+                throw DbException.getInternalError();
             }
         }
         int offset = last - rowLength;
@@ -284,7 +289,7 @@ public class PageBtreeNode extends PageBtree {
     void init(PageBtree page1, SearchRow pivot, PageBtree page2) {
         entryCount = 0;
         childPageIds = new int[] { page1.getPos() };
-        rows = SearchRow.EMPTY_ARRAY;
+        rows = PageStoreRow.EMPTY_SEARCH_ARRAY;
         offsets = Utils.EMPTY_INT_ARRAY;
         addChild(0, page2.getPos(), pivot);
         if (pageStoreInternalCount) {
@@ -382,9 +387,7 @@ public class PageBtreeNode extends PageBtree {
                 int child = childPageIds[i];
                 PageBtree page = index.getPage(child);
                 count += page.getRowCount();
-                index.getDatabase().setProgress(
-                        DatabaseEventListener.STATE_SCAN_FILE,
-                        index.getName(), count, Integer.MAX_VALUE);
+                index.getDatabase().setProgress(DatabaseEventListener.STATE_SCAN_FILE, index.getName(), count, 0);
             }
             rowCount = count;
         }
@@ -411,9 +414,8 @@ public class PageBtreeNode extends PageBtree {
     private void check() {
         if (SysProperties.CHECK) {
             for (int i = 0; i < entryCount + 1; i++) {
-                int child = childPageIds[i];
-                if (child == 0) {
-                    DbException.throwInternalError();
+                if (childPageIds[i] == 0) {
+                    throw DbException.getInternalError();
                 }
             }
         }
@@ -473,7 +475,7 @@ public class PageBtreeNode extends PageBtree {
         written = false;
         changeCount = index.getPageStore().getChangeCount();
         if (entryCount < 0) {
-            DbException.throwInternalError(Integer.toString(entryCount));
+            throw DbException.getInternalError(Integer.toString(entryCount));
         }
         if (entryCount > i) {
             int startNext = i > 0 ? offsets[i - 1] : index.getPageStore().getPageSize();
@@ -552,7 +554,7 @@ public class PageBtreeNode extends PageBtree {
     }
 
     @Override
-    public void moveTo(Session session, int newPos) {
+    public void moveTo(SessionLocal session, int newPos) {
         PageStore store = index.getPageStore();
         store.logUndo(this, data);
         PageBtreeNode p2 = PageBtreeNode.create(index, newPos, parentPageId);
@@ -572,7 +574,7 @@ public class PageBtreeNode extends PageBtree {
         } else {
             Page p = store.getPage(parentPageId);
             if (!(p instanceof PageBtreeNode)) {
-                throw DbException.throwInternalError();
+                throw DbException.getInternalError();
             }
             PageBtreeNode n = (PageBtreeNode) p;
             n.moveChild(getPos(), newPos);
@@ -603,7 +605,7 @@ public class PageBtreeNode extends PageBtree {
                 return;
             }
         }
-        throw DbException.throwInternalError(oldPos + " " + newPos);
+        throw DbException.getInternalError(oldPos + " " + newPos);
     }
 
 }

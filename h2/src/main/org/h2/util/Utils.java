@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -18,7 +18,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -36,15 +35,6 @@ public class Utils {
      * An 0-size int array.
      */
     public static final int[] EMPTY_INT_ARRAY = {};
-
-    /**
-     * An 0-size long array.
-     */
-    private static final long[] EMPTY_LONG_ARRAY = {};
-
-    private static final int GC_DELAY = 50;
-    private static final int MAX_GC = 8;
-    private static long lastGC;
 
     private static final HashMap<String, byte[]> RESOURCES = new HashMap<>();
 
@@ -236,11 +226,10 @@ public class Utils {
      *
      * @return the used memory
      */
-    public static int getMemoryUsed() {
+    public static long getMemoryUsed() {
         collectGarbage();
         Runtime rt = Runtime.getRuntime();
-        long mem = rt.totalMemory() - rt.freeMemory();
-        return (int) (mem >> 10);
+        return rt.totalMemory() - rt.freeMemory() >> 10;
     }
 
     /**
@@ -249,11 +238,9 @@ public class Utils {
      *
      * @return the free memory
      */
-    public static int getMemoryFree() {
+    public static long getMemoryFree() {
         collectGarbage();
-        Runtime rt = Runtime.getRuntime();
-        long mem = rt.freeMemory();
-        return (int) (mem >> 10);
+        return Runtime.getRuntime().freeMemory() >> 10;
     }
 
     /**
@@ -262,8 +249,7 @@ public class Utils {
      * @return the maximum memory
      */
     public static long getMemoryMax() {
-        long max = Runtime.getRuntime().maxMemory();
-        return max / 1024;
+        return Runtime.getRuntime().maxMemory() >> 10;
     }
 
     public static long getGarbageCollectionTime() {
@@ -277,34 +263,30 @@ public class Utils {
         return totalGCTime;
     }
 
-    private static synchronized void collectGarbage() {
-        Runtime runtime = Runtime.getRuntime();
-        long total = runtime.totalMemory();
-        long time = System.nanoTime();
-        if (lastGC + TimeUnit.MILLISECONDS.toNanos(GC_DELAY) < time) {
-            for (int i = 0; i < MAX_GC; i++) {
-                runtime.gc();
-                long now = runtime.totalMemory();
-                if (now == total) {
-                    lastGC = System.nanoTime();
-                    break;
-                }
-                total = now;
+    public static long getGarbageCollectionCount() {
+        long totalGCCount = 0;
+        int poolCount = 0;
+        for (GarbageCollectorMXBean gcMXBean : ManagementFactory.getGarbageCollectorMXBeans()) {
+            long collectionCount = gcMXBean.getCollectionTime();
+            if(collectionCount > 0) {
+                totalGCCount += collectionCount;
+                poolCount += gcMXBean.getMemoryPoolNames().length;
             }
         }
+        poolCount = Math.max(poolCount, 1);
+        return (totalGCCount + (poolCount >> 1)) / poolCount;
     }
 
     /**
-     * Create an int array with the given size.
-     *
-     * @param len the number of bytes requested
-     * @return the int array
+     * Run Java memory garbage collection.
      */
-    public static int[] newIntArray(int len) {
-        if (len == 0) {
-            return EMPTY_INT_ARRAY;
+    public static synchronized void collectGarbage() {
+        Runtime runtime = Runtime.getRuntime();
+        long garbageCollectionCount = getGarbageCollectionCount();
+        while (garbageCollectionCount == getGarbageCollectionCount()) {
+            runtime.gc();
+            Thread.yield();
         }
-        return new int[len];
     }
 
     /**
@@ -318,55 +300,47 @@ public class Utils {
     }
 
     /**
-     * Create a long array with the given size.
-     *
-     * @param len the number of bytes requested
-     * @return the int array
-     */
-    public static long[] newLongArray(int len) {
-        if (len == 0) {
-            return EMPTY_LONG_ARRAY;
-        }
-        return new long[len];
-    }
-
-    /**
      * Find the top limit values using given comparator and place them as in a
      * full array sort, in descending order.
      *
+     * @param <X> the type of elements
      * @param array the array.
-     * @param offset the offset.
-     * @param limit the limit.
+     * @param fromInclusive the start index, inclusive
+     * @param toExclusive the end index, exclusive
      * @param comp the comparator.
      */
-    public static <X> void sortTopN(X[] array, int offset, int limit,
-            Comparator<? super X> comp) {
-        partitionTopN(array, offset, limit, comp);
-        Arrays.sort(array, offset,
-                (int) Math.min((long) offset + limit, array.length), comp);
+    public static <X> void sortTopN(X[] array, int fromInclusive, int toExclusive, Comparator<? super X> comp) {
+        int highInclusive = array.length - 1;
+        if (highInclusive > 0 && toExclusive > fromInclusive) {
+            partialQuickSort(array, 0, highInclusive, comp, fromInclusive, toExclusive - 1);
+            Arrays.sort(array, fromInclusive, toExclusive, comp);
+        }
     }
 
     /**
-     * Find the top limit values using given comparator and place them as in a
-     * full array sort. This method does not sort the top elements themselves.
+     * Partial quick sort.
      *
-     * @param array the array
-     * @param offset the offset
-     * @param limit the limit
+     * <p>
+     * Works with elements from {@code low} to {@code high} indexes, inclusive.
+     * </p>
+     * <p>
+     * Moves smallest elements to {@code low..start-1} positions and largest
+     * elements to {@code end+1..high} positions. Middle elements are placed
+     * into {@code start..end} positions. All these regions aren't fully sorted.
+     * </p>
+     *
+     * @param <X> the type of elements
+     * @param array the array to sort
+     * @param low the lower index with data, inclusive
+     * @param high the higher index with data, inclusive, {@code high > low}
      * @param comp the comparator
+     * @param start the start index of requested region, inclusive
+     * @param end the end index of requested region, inclusive, {@code end >= start}
      */
-    private static <X> void partitionTopN(X[] array, int offset, int limit,
-            Comparator<? super X> comp) {
-        partialQuickSort(array, 0, array.length - 1, comp, offset, offset +
-                limit - 1);
-    }
-
     private static <X> void partialQuickSort(X[] array, int low, int high,
             Comparator<? super X> comp, int start, int end) {
-        if (low > end || high < start || (low > start && high < end)) {
-            return;
-        }
-        if (low == high) {
+        if (low >= start && high <= end) {
+            // Don't sort blocks entirely contained in the middle region
             return;
         }
         int i = low, j = high;
@@ -391,39 +365,12 @@ public class Utils {
                 array[j--] = temp;
             }
         }
-        if (low < j) {
+        if (low < j && /* Intersection with middle region */ start <= j) {
             partialQuickSort(array, low, j, comp, start, end);
         }
-        if (i < high) {
+        if (i < high && /* Intersection with middle region */ i <= end) {
             partialQuickSort(array, i, high, comp, start, end);
         }
-    }
-
-    /**
-     * Checks if given classes have a common Comparable superclass.
-     *
-     * @param c1 the first class
-     * @param c2 the second class
-     * @return true if they have
-     */
-    public static boolean haveCommonComparableSuperclass(
-            Class<?> c1, Class<?> c2) {
-        if (c1 == c2 || c1.isAssignableFrom(c2) || c2.isAssignableFrom(c1)) {
-            return true;
-        }
-        Class<?> top1;
-        do {
-            top1 = c1;
-            c1 = c1.getSuperclass();
-        } while (Comparable.class.isAssignableFrom(c1));
-
-        Class<?> top2;
-        do {
-            top2 = c2;
-            c2 = c2.getSuperclass();
-        } while (Comparable.class.isAssignableFrom(c2));
-
-        return top1 == top2;
     }
 
     /**
@@ -581,47 +528,6 @@ public class Utils {
             return points;
         }
         return 0;
-    }
-
-    /**
-     * Returns a static field.
-     *
-     * @param classAndField a string with the entire class and field name
-     * @return the field value
-     */
-    public static Object getStaticField(String classAndField) throws Exception {
-        int lastDot = classAndField.lastIndexOf('.');
-        String className = classAndField.substring(0, lastDot);
-        String fieldName = classAndField.substring(lastDot + 1);
-        return Class.forName(className).getField(fieldName).get(null);
-    }
-
-    /**
-     * Returns a static field.
-     *
-     * @param instance the instance on which the call is done
-     * @param fieldName the field name
-     * @return the field value
-     */
-    public static Object getField(Object instance, String fieldName)
-            throws Exception {
-        return instance.getClass().getField(fieldName).get(instance);
-    }
-
-    /**
-     * Returns true if the class is present in the current class loader.
-     *
-     * @param fullyQualifiedClassName a string with the entire class name, eg.
-     *        "java.lang.System"
-     * @return true if the class is present
-     */
-    public static boolean isClassPresent(String fullyQualifiedClassName) {
-        try {
-            Class.forName(fullyQualifiedClassName);
-            return true;
-        } catch (ClassNotFoundException e) {
-            return false;
-        }
     }
 
     /**
@@ -783,8 +689,56 @@ public class Utils {
             return (int) (value * physicalMemorySize / (1024 * 1024 * 1024));
         } catch (Exception e) {
             // ignore
+        } catch (Error error) {
+            // ignore
         }
         return value;
+    }
+
+    /**
+     * Returns the current value of the high-resolution time source.
+     *
+     * @return time in nanoseconds, never equal to 0
+     * @see System#nanoTime()
+     */
+    public static long currentNanoTime() {
+        long time = System.nanoTime();
+        if (time == 0L) {
+            time = 1L;
+        }
+        return time;
+    }
+
+    /**
+     * Returns the current value of the high-resolution time source plus the
+     * specified offset.
+     *
+     * @param ms
+     *            additional offset in milliseconds
+     * @return time in nanoseconds, never equal to 0
+     * @see System#nanoTime()
+     */
+    public static long currentNanoTimePlusMillis(int ms) {
+        return nanoTimePlusMillis(System.nanoTime(), ms);
+    }
+
+    /**
+     * Returns the current value of the high-resolution time source plus the
+     * specified offset.
+     *
+     * @param nanoTime
+     *            time in nanoseconds
+     * @param ms
+     *            additional offset in milliseconds
+     * @return time in nanoseconds, never equal to 0
+     * @see System#nanoTime()
+     */
+    public static long nanoTimePlusMillis(long nanoTime, int ms) {
+        long time = nanoTime + ms * 1_000_000L;
+        if (time == 0L) {
+            time = 1L;
+        }
+        return time;
     }
 
     /**

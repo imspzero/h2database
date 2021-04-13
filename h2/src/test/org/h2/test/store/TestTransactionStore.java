@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -16,15 +16,15 @@ import java.util.List;
 import java.util.Map.Entry;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import org.h2.mvstore.DataUtils;
-import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
+import org.h2.mvstore.MVStoreException;
 import org.h2.mvstore.tx.Transaction;
 import org.h2.mvstore.tx.TransactionMap;
 import org.h2.mvstore.tx.TransactionStore;
 import org.h2.mvstore.tx.TransactionStore.Change;
-import org.h2.mvstore.type.ObjectDataType;
+import org.h2.mvstore.type.LongDataType;
+import org.h2.mvstore.type.StringDataType;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.util.Task;
@@ -40,7 +40,7 @@ public class TestTransactionStore extends TestBase {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -53,7 +53,6 @@ public class TestTransactionStore extends TestBase {
         testConcurrentUpdate();
         testRepeatedChange();
         testTransactionAge();
-        testStopWhileCommitting();
         testGetModifiedMaps();
         testKeyIterator();
         testTwoPhaseCommit();
@@ -62,6 +61,7 @@ public class TestTransactionStore extends TestBase {
         testSingleConnection();
         testCompareWithPostgreSQL();
         testStoreMultiThreadedReads();
+        testCommitAfterMapRemoval();
     }
 
     private void testHCLFKey() {
@@ -69,7 +69,7 @@ public class TestTransactionStore extends TestBase {
         final TransactionStore ts = new TransactionStore(s);
         ts.init();
         Transaction t = ts.begin();
-        ObjectDataType keyType = new ObjectDataType();
+        LongDataType keyType = LongDataType.INSTANCE;
         TransactionMap<Long, Long> map = t.openMap("test", keyType, keyType);
         // firstKey()
         assertNull(map.firstKey());
@@ -133,7 +133,7 @@ public class TestTransactionStore extends TestBase {
                         try {
                             map.remove(k);
                             map.put(k, r.nextInt());
-                        } catch (IllegalStateException e) {
+                        } catch (MVStoreException e) {
                             // ignore and retry
                         }
                         tx.commit();
@@ -174,7 +174,7 @@ public class TestTransactionStore extends TestBase {
                     map = tx.openMap("data");
                     try {
                         map.put(k, r.nextInt());
-                    } catch (IllegalStateException e) {
+                    } catch (MVStoreException e) {
                         failCount.incrementAndGet();
                         // ignore and retry
                     }
@@ -194,7 +194,7 @@ public class TestTransactionStore extends TestBase {
             map = tx.openMap("data");
             try {
                 map.put(k, r.nextInt());
-            } catch (IllegalStateException e) {
+            } catch (MVStoreException e) {
                 failCount.incrementAndGet();
                 // ignore and retry
             }
@@ -262,13 +262,7 @@ public class TestTransactionStore extends TestBase {
 
         Transaction tx2 = ts.begin();
         TransactionMap<Integer, Integer> map2 = tx2.openMap("data");
-        try {
-            map2.put(1, 20);
-            fail();
-        } catch (IllegalStateException e) {
-            assertEquals(DataUtils.ERROR_TRANSACTION_LOCKED,
-                    DataUtils.getErrorCode(e.getMessage()));
-        }
+        assertThrows(DataUtils.ERROR_TRANSACTION_LOCKED, () -> map2.put(1, 20));
         assertEquals(10, map1.get(1).intValue());
         assertNull(map2.get(1));
         tx1.commit();
@@ -325,111 +319,25 @@ public class TestTransactionStore extends TestBase {
         }
 
         s = MVStore.open(null);
-        ts = new TransactionStore(s);
-        ts.init();
-        ts.setMaxTransactionId(16);
+        TransactionStore ts2 = new TransactionStore(s);
+        ts2.init();
+        ts2.setMaxTransactionId(16);
         ArrayList<Transaction> fifo = new ArrayList<>();
         int open = 0;
         for (int i = 0; i < 64; i++) {
             Transaction t = null;
             if (open >= 16) {
-                try {
-                    t = ts.begin();
-                    fail();
-                } catch (IllegalStateException e) {
-                    // expected - too many open
-                }
+                assertThrows(MVStoreException.class, () -> ts2.begin());
                 Transaction first = fifo.remove(0);
                 first.commit();
                 open--;
             }
-            t = ts.begin();
+            t = ts2.begin();
             t.openMap("data").put(i, i);
             fifo.add(t);
             open++;
         }
         s.close();
-    }
-
-    private void testStopWhileCommitting() throws Exception {
-        String fileName = getBaseDir() + "/testStopWhileCommitting.h3";
-        FileUtils.delete(fileName);
-        Random r = new Random(0);
-
-        for (int i = 0; i < 10;) {
-            MVStore s;
-            TransactionStore ts;
-            Transaction tx;
-            TransactionMap<Integer, String> m;
-
-            s = MVStore.open(fileName);
-            ts = new TransactionStore(s);
-            ts.init();
-            tx = ts.begin();
-            s.setReuseSpace(false);
-            m = tx.openMap("test");
-            final String value = "x" + i;
-            for (int j = 0; j < 1000; j++) {
-                m.put(j, value);
-            }
-            final AtomicInteger state = new AtomicInteger();
-            final MVStore store = s;
-            final MVMap<Integer, String> other = s.openMap("other");
-            Task task = new Task() {
-
-                @Override
-                public void call() throws Exception {
-                    for (int i = 0; !stop; i++) {
-                        state.set(i);
-                        other.put(i, value);
-                        store.commit();
-                    }
-                }
-            };
-            task.execute();
-            // wait for the task to start
-            while (state.get() < 1) {
-                Thread.yield();
-            }
-            // commit while writing in the task
-            tx.commit();
-            // wait for the task to stop
-            task.get();
-            store.close();
-            s = MVStore.open(fileName);
-            // roll back a bit, until we have some undo log entries
-            for (int back = 0; back < 100; back++) {
-                int minus = r.nextInt(10);
-                s.rollbackTo(Math.max(0, s.getCurrentVersion() - minus));
-                if (hasDataUndoLog(s)) {
-                    break;
-                }
-            }
-            // re-open TransactionStore, because we rolled back
-            // underlying MVStore without rolling back TransactionStore
-            s.close();
-            s = MVStore.open(fileName);
-            ts = new TransactionStore(s);
-            List<Transaction> list = ts.getOpenTransactions();
-            if (list.size() != 0) {
-                tx = list.get(0);
-                if (tx.getStatus() == Transaction.STATUS_COMMITTED) {
-                    i++;
-                }
-            }
-            s.close();
-            FileUtils.delete(fileName);
-            assertFalse(FileUtils.exists(fileName));
-        }
-    }
-
-    private static boolean hasDataUndoLog(MVStore s) {
-        for (int i = 0; i < 255; i++) {
-            if (s.hasData(TransactionStore.getUndoLogName(i))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void testGetModifiedMaps() {
@@ -1018,4 +926,26 @@ public class TestTransactionStore extends TestBase {
         ts.close();
     }
 
+    private void testCommitAfterMapRemoval() {
+        try (MVStore s = MVStore.open(null)) {
+            TransactionStore ts = new TransactionStore(s);
+            ts.init();
+            Transaction t = ts.begin();
+            TransactionMap<Long,String> map = t.openMap("test", LongDataType.INSTANCE, StringDataType.INSTANCE);
+            map.put(1L, "A");
+            s.removeMap("test");
+            try {
+                t.commit();
+            } finally {
+                // commit should not fail, but even if it does
+                // transaction should be cleanly removed and store remains operational
+                assertTrue(ts.getOpenTransactions().isEmpty());
+                assertFalse(ts.hasMap("test"));
+                t = ts.begin();
+                map = t.openMap("test", LongDataType.INSTANCE, StringDataType.INSTANCE);
+                assertTrue(map.isEmpty());
+                map.put(2L, "B");
+            }
+        }
+    }
 }

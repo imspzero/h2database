@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,8 +8,6 @@ package org.h2.tools;
 import java.io.IOException;
 import java.io.PipedReader;
 import java.io.PipedWriter;
-import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -17,6 +15,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.h2.jdbc.JdbcConnection;
 import org.h2.util.Tool;
 
 /**
@@ -100,11 +99,9 @@ public class CreateCluster extends Tool {
 
     private static void process(String urlSource, String urlTarget,
             String user, String password, String serverList) throws SQLException {
-        org.h2.Driver.load();
-
         // use cluster='' so connecting is possible
         // even if the cluster is enabled
-        try (Connection connSource = DriverManager.getConnection(urlSource + ";CLUSTER=''", user, password);
+        try (JdbcConnection connSource = new JdbcConnection(urlSource + ";CLUSTER=''", null, user, password);
                 Statement statSource = connSource.createStatement()) {
             // enable the exclusive mode and close other connections,
             // so that data can't change while restoring the second database
@@ -122,7 +119,7 @@ public class CreateCluster extends Tool {
             String serverList) throws SQLException {
 
         // Delete the target database first.
-        try (Connection connTarget = DriverManager.getConnection(urlTarget + ";CLUSTER=''", user, password);
+        try (JdbcConnection connTarget = new JdbcConnection(urlTarget + ";CLUSTER=''", null, user, password);
                 Statement statTarget = connTarget.createStatement()) {
             statTarget.execute("DROP ALL OBJECTS DELETE FILES");
         }
@@ -131,7 +128,7 @@ public class CreateCluster extends Tool {
             Future<?> threadFuture = startWriter(pipeReader, statSource);
 
             // Read data from pipe reader, restore on target.
-            try (Connection connTarget = DriverManager.getConnection(urlTarget, user, password);
+            try (JdbcConnection connTarget = new JdbcConnection(urlTarget, null, user, password);
                     Statement statTarget = connTarget.createStatement()) {
                 RunScript.execute(connTarget, pipeReader);
 
@@ -159,22 +156,19 @@ public class CreateCluster extends Tool {
         final PipedWriter pipeWriter = new PipedWriter(pipeReader);
         // Since exceptions cannot be thrown across thread boundaries, return
         // the task's future so we can check manually
-        Future<?> threadFuture = thread.submit(new Runnable() {
-            @Override
-            public void run() {
-                // If the creation of the piped writer fails, the reader will
-                // throw an IOException as soon as read() is called: IOException
-                // - if the pipe is broken, unconnected, closed, or an I/O error
-                // occurs. The reader's IOException will then trigger the
-                // finally{} that releases exclusive mode on the source DB.
-                try (PipedWriter writer = pipeWriter;
-                        final ResultSet rs = statSource.executeQuery("SCRIPT")) {
-                    while (rs.next()) {
-                        writer.write(rs.getString(1) + "\n");
-                    }
-                } catch (SQLException | IOException ex) {
-                    throw new IllegalStateException("Producing script from the source DB is failing.", ex);
+        Future<?> threadFuture = thread.submit(() -> {
+            // If the creation of the piped writer fails, the reader will
+            // throw an IOException as soon as read() is called: IOException
+            // - if the pipe is broken, unconnected, closed, or an I/O error
+            // occurs. The reader's IOException will then trigger the
+            // finally{} that releases exclusive mode on the source DB.
+            try (PipedWriter writer = pipeWriter;
+                    final ResultSet rs = statSource.executeQuery("SCRIPT")) {
+                while (rs.next()) {
+                    writer.write(rs.getString(1) + "\n");
                 }
+            } catch (SQLException | IOException ex) {
+                throw new IllegalStateException("Producing script from the source DB is failing.", ex);
             }
         });
 

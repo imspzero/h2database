@@ -1,10 +1,11 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.pagestore.db;
 
+import org.h2.engine.Constants;
 import org.h2.pagestore.Page;
 import org.h2.result.SearchRow;
 import org.h2.store.Data;
@@ -13,6 +14,11 @@ import org.h2.store.Data;
  * A page that contains index data.
  */
 public abstract class PageBtree extends Page {
+
+    /**
+     * The memory needed by an object of class PageBtree.
+     */
+    static final int MEMORY_PAGE_BTREE = 112 + Constants.MEMORY_DATA + 2 * Constants.MEMORY_OBJECT;
 
     /**
      * This is a root page.
@@ -115,13 +121,13 @@ public abstract class PageBtree extends Page {
             SearchRow row = getRow(i);
             comp = index.compareRows(row, compare);
             if (comp == 0) {
-                if (add && index.getIndexType().isUnique()) {
+                if (add && index.getUniqueColumnCount() > 0) {
                     if (!index.mayHaveNullDuplicates(compare)) {
                         throw index.getDuplicateKeyException(compare.toString());
                     }
                 }
                 if (compareKeys) {
-                    comp = index.compareKeys(row, compare);
+                    comp = TreeIndex.compareKeys(row, compare);
                     if (comp == 0) {
                         return i;
                     }

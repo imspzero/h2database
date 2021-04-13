@@ -1,22 +1,19 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.value;
 
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.sql.Timestamp;
 import org.h2.api.ErrorCode;
-import org.h2.engine.Mode;
+import org.h2.engine.CastDataProvider;
 import org.h2.message.DbException;
 import org.h2.util.DateTimeUtils;
 
 /**
  * Implementation of the TIMESTAMP data type.
  */
-public class ValueTimestamp extends Value {
+public final class ValueTimestamp extends Value {
 
     /**
      * The default precision and display size of the textual representation of a timestamp.
@@ -33,7 +30,7 @@ public class ValueTimestamp extends Value {
     /**
      * The default scale for timestamps.
      */
-    static final int DEFAULT_SCALE = 6;
+    public static final int DEFAULT_SCALE = 6;
 
     /**
      * The maximum scale for timestamps.
@@ -51,10 +48,13 @@ public class ValueTimestamp extends Value {
     private final long timeNanos;
 
     private ValueTimestamp(long dateValue, long timeNanos) {
-        this.dateValue = dateValue;
+        if (dateValue < DateTimeUtils.MIN_DATE_VALUE || dateValue > DateTimeUtils.MAX_DATE_VALUE) {
+            throw new IllegalArgumentException("dateValue out of range " + dateValue);
+        }
         if (timeNanos < 0 || timeNanos >= DateTimeUtils.NANOS_PER_DAY) {
             throw new IllegalArgumentException("timeNanos out of range " + timeNanos);
         }
+        this.dateValue = dateValue;
         this.timeNanos = timeNanos;
     }
 
@@ -71,74 +71,21 @@ public class ValueTimestamp extends Value {
     }
 
     /**
-     * Get or create a timestamp value for the given timestamp.
-     *
-     * @param timestamp the timestamp
-     * @return the value
-     */
-    public static ValueTimestamp get(Timestamp timestamp) {
-        long ms = timestamp.getTime();
-        long nanos = timestamp.getNanos() % 1_000_000;
-        ms += DateTimeUtils.getTimeZoneOffset(ms);
-        long dateValue = DateTimeUtils.dateValueFromLocalMillis(ms);
-        nanos += DateTimeUtils.nanosFromLocalMillis(ms);
-        return fromDateValueAndNanos(dateValue, nanos);
-    }
-
-    /**
-     * Get or create a timestamp value for the given date/time in millis.
-     *
-     * @param ms the milliseconds
-     * @param nanos the nanoseconds
-     * @return the value
-     */
-    public static ValueTimestamp fromMillisNanos(long ms, int nanos) {
-        ms += DateTimeUtils.getTimeZoneOffset(ms);
-        long dateValue = DateTimeUtils.dateValueFromLocalMillis(ms);
-        long timeNanos = nanos + DateTimeUtils.nanosFromLocalMillis(ms);
-        return fromDateValueAndNanos(dateValue, timeNanos);
-    }
-
-    /**
-     * Get or create a timestamp value for the given date/time in millis.
-     *
-     * @param ms the milliseconds
-     * @return the value
-     */
-    public static ValueTimestamp fromMillis(long ms) {
-        ms += DateTimeUtils.getTimeZoneOffset(ms);
-        long dateValue = DateTimeUtils.dateValueFromLocalMillis(ms);
-        long nanos = DateTimeUtils.nanosFromLocalMillis(ms);
-        return fromDateValueAndNanos(dateValue, nanos);
-    }
-
-    /**
-     * Parse a string to a ValueTimestamp. This method supports the format
-     * +/-year-month-day hour[:.]minute[:.]seconds.fractional and an optional timezone
-     * part.
-     *
-     * @param s the string to parse
-     * @return the date
-     */
-    public static ValueTimestamp parse(String s) {
-        return parse(s, null);
-    }
-
-    /**
-     * Parse a string to a ValueTimestamp, using the given {@link Mode}.
+     * Parse a string to a ValueTimestamp, using the given {@link CastDataProvider}.
      * This method supports the format +/-year-month-day[ -]hour[:.]minute[:.]seconds.fractional
      * and an optional timezone part.
      *
      * @param s the string to parse
-     * @param mode the database {@link Mode}
+     * @param provider
+     *            the cast information provider, may be {@code null} for
+     *            literals without time zone
      * @return the date
      */
-    public static ValueTimestamp parse(String s, Mode mode) {
+    public static ValueTimestamp parse(String s, CastDataProvider provider) {
         try {
-            return (ValueTimestamp) DateTimeUtils.parseTimestamp(s, mode, false);
+            return (ValueTimestamp) DateTimeUtils.parseTimestamp(s, provider, false);
         } catch (Exception e) {
-            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2,
-                    e, "TIMESTAMP", s);
+            throw DbException.get(ErrorCode.INVALID_DATETIME_CONSTANT_2, e, "TIMESTAMP", s);
         }
     }
 
@@ -162,11 +109,6 @@ public class ValueTimestamp extends Value {
     }
 
     @Override
-    public Timestamp getTimestamp() {
-        return DateTimeUtils.convertDateValueToTimestamp(dateValue, timeNanos);
-    }
-
-    @Override
     public TypeInfo getType() {
         return TypeInfo.TYPE_TIMESTAMP;
     }
@@ -183,51 +125,30 @@ public class ValueTimestamp extends Value {
 
     @Override
     public String getString() {
-        StringBuilder buff = new StringBuilder(MAXIMUM_PRECISION);
-        DateTimeUtils.appendDate(buff, dateValue);
-        buff.append(' ');
-        DateTimeUtils.appendTime(buff, timeNanos);
-        return buff.toString();
+        return toString(new StringBuilder(MAXIMUM_PRECISION), false).toString();
+    }
+
+    /**
+     * Returns value as string in ISO format.
+     *
+     * @return value as string in ISO format
+     */
+    public String getISOString() {
+        return toString(new StringBuilder(MAXIMUM_PRECISION), true).toString();
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder) {
-        builder.append("TIMESTAMP '");
-        DateTimeUtils.appendDate(builder, dateValue);
-        builder.append(' ');
-        DateTimeUtils.appendTime(builder, timeNanos);
-        return builder.append('\'');
+    public StringBuilder getSQL(StringBuilder builder, int sqlFlags) {
+        return toString(builder.append("TIMESTAMP '"), false).append('\'');
+    }
+
+    private StringBuilder toString(StringBuilder builder, boolean iso) {
+        DateTimeUtils.appendDate(builder, dateValue).append(iso ? 'T' : ' ');
+        return DateTimeUtils.appendTime(builder, timeNanos);
     }
 
     @Override
-    public boolean checkPrecision(long precision) {
-        // TIMESTAMP data type does not have precision parameter
-        return true;
-    }
-
-    @Override
-    public Value convertScale(boolean onlyToSmallerScale, int targetScale) {
-        if (targetScale >= MAXIMUM_SCALE) {
-            return this;
-        }
-        if (targetScale < 0) {
-            throw DbException.getInvalidValueException("scale", targetScale);
-        }
-        long n = timeNanos;
-        long n2 = DateTimeUtils.convertScale(n, targetScale);
-        if (n2 == n) {
-            return this;
-        }
-        long dv = dateValue;
-        if (n2 >= DateTimeUtils.NANOS_PER_DAY) {
-            n2 -= DateTimeUtils.NANOS_PER_DAY;
-            dv = DateTimeUtils.incrementDateValue(dv);
-        }
-        return fromDateValueAndNanos(dv, n2);
-    }
-
-    @Override
-    public int compareTypeSafe(Value o, CompareMode mode) {
+    public int compareTypeSafe(Value o, CompareMode mode, CastDataProvider provider) {
         ValueTimestamp t = (ValueTimestamp) o;
         int c = Long.compare(dateValue, t.dateValue);
         if (c != 0) {
@@ -253,30 +174,29 @@ public class ValueTimestamp extends Value {
     }
 
     @Override
-    public Object getObject() {
-        return getTimestamp();
-    }
-
-    @Override
-    public void set(PreparedStatement prep, int parameterIndex)
-            throws SQLException {
-        prep.setTimestamp(parameterIndex, getTimestamp());
-    }
-
-    @Override
     public Value add(Value v) {
-        ValueTimestamp t = (ValueTimestamp) v.convertTo(Value.TIMESTAMP);
-        long d1 = DateTimeUtils.absoluteDayFromDateValue(dateValue);
-        long d2 = DateTimeUtils.absoluteDayFromDateValue(t.dateValue);
-        return DateTimeUtils.normalizeTimestamp(d1 + d2, timeNanos + t.timeNanos);
+        ValueTimestamp t = (ValueTimestamp) v;
+        long absoluteDay = DateTimeUtils.absoluteDayFromDateValue(dateValue)
+                + DateTimeUtils.absoluteDayFromDateValue(t.dateValue);
+        long nanos = timeNanos + t.timeNanos;
+        if (nanos >= DateTimeUtils.NANOS_PER_DAY) {
+            nanos -= DateTimeUtils.NANOS_PER_DAY;
+            absoluteDay++;
+        }
+        return ValueTimestamp.fromDateValueAndNanos(DateTimeUtils.dateValueFromAbsoluteDay(absoluteDay), nanos);
     }
 
     @Override
     public Value subtract(Value v) {
-        ValueTimestamp t = (ValueTimestamp) v.convertTo(Value.TIMESTAMP);
-        long d1 = DateTimeUtils.absoluteDayFromDateValue(dateValue);
-        long d2 = DateTimeUtils.absoluteDayFromDateValue(t.dateValue);
-        return DateTimeUtils.normalizeTimestamp(d1 - d2, timeNanos - t.timeNanos);
+        ValueTimestamp t = (ValueTimestamp) v;
+        long absoluteDay = DateTimeUtils.absoluteDayFromDateValue(dateValue)
+                - DateTimeUtils.absoluteDayFromDateValue(t.dateValue);
+        long nanos = timeNanos - t.timeNanos;
+        if (nanos < 0) {
+            nanos += DateTimeUtils.NANOS_PER_DAY;
+            absoluteDay--;
+        }
+        return ValueTimestamp.fromDateValueAndNanos(DateTimeUtils.dateValueFromAbsoluteDay(absoluteDay), nanos);
     }
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -7,8 +7,8 @@ package org.h2.expression.condition;
 
 import java.util.Arrays;
 
-import org.h2.command.dml.Query;
-import org.h2.engine.Session;
+import org.h2.command.query.Query;
+import org.h2.engine.SessionLocal;
 import org.h2.expression.Expression;
 import org.h2.expression.ValueExpression;
 import org.h2.result.LocalResult;
@@ -41,9 +41,9 @@ public class UniquePredicate extends PredicateWithSubquery {
         }
 
         @Override
-        public int getRowCount() {
+        public long getRowCount() {
             // Not required
-            return 0;
+            return 0L;
         }
 
         @Override
@@ -59,7 +59,7 @@ public class UniquePredicate extends PredicateWithSubquery {
             if (values.length != columnCount) {
                 values = Arrays.copyOf(values, columnCount);
             }
-            int expected = result.getRowCount() + 1;
+            long expected = result.getRowCount() + 1;
             result.addRow(values);
             if (expected != result.getRowCount()) {
                 hasDuplicates = true;
@@ -73,19 +73,19 @@ public class UniquePredicate extends PredicateWithSubquery {
     }
 
     @Override
-    public Expression optimize(Session session) {
+    public Expression optimize(SessionLocal session) {
         super.optimize(session);
         if (query.isStandardDistinct()) {
-            return ValueExpression.getBoolean(true);
+            return ValueExpression.TRUE;
         }
         return this;
     }
 
     @Override
-    public Value getValue(Session session) {
+    public Value getValue(SessionLocal session) {
         query.setSession(session);
         int columnCount = query.getColumnCount();
-        LocalResult result = session.getDatabase().getResultFactory().create(session,
+        LocalResult result = new LocalResult(session,
                 query.getExpressions().toArray(new Expression[0]), columnCount, columnCount);
         result.setDistinct();
         Target target = new Target(columnCount, result);
@@ -95,8 +95,8 @@ public class UniquePredicate extends PredicateWithSubquery {
     }
 
     @Override
-    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
-        return super.getSQL(builder.append("UNIQUE"), alwaysQuote);
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        return super.getUnenclosedSQL(builder.append("UNIQUE"), sqlFlags);
     }
 
 }

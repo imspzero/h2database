@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,6 +10,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -21,6 +22,7 @@ import org.h2.test.TestDb;
 import org.h2.tools.DeleteDbFiles;
 import org.h2.tools.Recover;
 import org.h2.util.IOUtils;
+import org.h2.util.Utils10;
 
 /**
  * Tests database recovery.
@@ -33,7 +35,7 @@ public class TestRecovery extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -92,8 +94,7 @@ public class TestRecovery extends TestDb {
         DeleteDbFiles.execute(getBaseDir(), "recovery", true);
         Connection conn = getConnection("recovery");
         Statement stat = conn.createStatement();
-        stat.execute("CREATE ALIAS IF NOT EXISTS FTL_INIT " +
-                "FOR \"org.h2.fulltext.FullTextLucene.init\"");
+        stat.execute("CREATE ALIAS IF NOT EXISTS FTL_INIT FOR 'org.h2.fulltext.FullTextLucene.init'");
         stat.execute("CALL FTL_INIT()");
         stat.execute("create table test(id int primary key, name varchar) as " +
                 "select 1, 'Hello'");
@@ -203,9 +204,8 @@ public class TestRecovery extends TestDb {
         conn.setAutoCommit(false);
         long base = 0;
         while (true) {
-            ResultSet rs = stat.executeQuery(
-                        "select value from information_schema.settings " +
-                        "where name = 'info.FILE_WRITE'");
+            ResultSet rs = stat.executeQuery("SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS"
+                    + " WHERE SETTING_NAME = 'info.FILE_WRITE'");
             rs.next();
             long count = rs.getLong(1);
             if (base == 0) {
@@ -265,7 +265,7 @@ public class TestRecovery extends TestDb {
         DeleteDbFiles.execute(getBaseDir(), "recovery2", true);
     }
 
-    private void testRunScript() throws SQLException {
+    private void testRunScript() throws Exception {
         DeleteDbFiles.execute(getBaseDir(), "recovery", true);
         DeleteDbFiles.execute(getBaseDir(), "recovery2", true);
         org.h2.Driver.load();
@@ -279,7 +279,7 @@ public class TestRecovery extends TestDb {
                 "select * from test");
         stat.execute("create table a(id int primary key) as " +
                 "select * from system_range(1, 100)");
-        stat.execute("create table b(id int references a(id)) as " +
+        stat.execute("create table b(id int primary key references a(id)) as " +
                 "select * from system_range(1, 100)");
         stat.execute("create table lob(c clob, b blob) as " +
                 "select space(10000) || 'end', SECURE_RAND(10000)");
@@ -294,9 +294,9 @@ public class TestRecovery extends TestDb {
 
         Recover rec = new Recover();
         ByteArrayOutputStream buff = new ByteArrayOutputStream();
-        rec.setOut(new PrintStream(buff));
+        rec.setOut(new PrintStream(buff, false, "UTF-8"));
         rec.runTool("-dir", getBaseDir(), "-db", "recovery", "-trace");
-        String out = new String(buff.toByteArray());
+        String out = Utils10.byteArrayOutputStreamToString(buff, StandardCharsets.UTF_8);
         assertContains(out, "Created file");
 
         Connection conn2 = getConnection("recovery2");
@@ -325,7 +325,7 @@ public class TestRecovery extends TestDb {
         FileUtils.deleteRecursive(dir, false);
     }
 
-    private void testRunScript2() throws SQLException {
+    private void testRunScript2() throws Exception {
         if (!config.mvStore) {
             // TODO Does not work in PageStore mode
             return;
@@ -336,15 +336,14 @@ public class TestRecovery extends TestDb {
         Connection conn = getConnection("recovery");
         Statement stat = conn.createStatement();
         stat.execute("SET COLLATION EN");
-        stat.execute("SET BINARY_COLLATION UNSIGNED");
         stat.execute("CREATE TABLE TEST(A VARCHAR)");
         conn.close();
 
         final Recover recover = new Recover();
         final ByteArrayOutputStream buff = new ByteArrayOutputStream(); // capture the console output
-        recover.setOut(new PrintStream(buff));
+        recover.setOut(new PrintStream(buff, false, "UTF-8"));
         recover.runTool("-dir", getBaseDir(), "-db", "recovery", "-trace");
-        String consoleOut = new String(buff.toByteArray());
+        String consoleOut = Utils10.byteArrayOutputStreamToString(buff, StandardCharsets.UTF_8);
         assertContains(consoleOut, "Created file");
 
         Connection conn2 = getConnection("recovery2");

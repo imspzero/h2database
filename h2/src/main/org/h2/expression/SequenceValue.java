@@ -1,66 +1,68 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.expression;
 
-import org.h2.engine.Session;
+import org.h2.command.Prepared;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.schema.Sequence;
-import org.h2.table.ColumnResolver;
-import org.h2.table.TableFilter;
 import org.h2.value.TypeInfo;
 import org.h2.value.Value;
-import org.h2.value.ValueLong;
 
 /**
  * Wraps a sequence when used in a statement.
  */
-public class SequenceValue extends Expression {
+public final class SequenceValue extends Operation0 {
 
     private final Sequence sequence;
 
+    private final boolean current;
+
+    private final Prepared prepared;
+
+    /**
+     * Creates new instance of NEXT VALUE FOR expression.
+     *
+     * @param sequence
+     *            the sequence
+     * @param prepared
+     *            the owner command, or {@code null}
+     */
+    public SequenceValue(Sequence sequence, Prepared prepared) {
+        this.sequence = sequence;
+        current = false;
+        this.prepared = prepared;
+    }
+
+    /**
+     * Creates new instance of CURRENT VALUE FOR expression.
+     *
+     * @param sequence
+     *            the sequence
+     */
     public SequenceValue(Sequence sequence) {
         this.sequence = sequence;
+        current = true;
+        prepared = null;
     }
 
     @Override
-    public Value getValue(Session session) {
-        ValueLong value = ValueLong.get(sequence.getNext(session));
-        session.setLastIdentity(value);
-        return value;
+    public Value getValue(SessionLocal session) {
+        return current ? session.getCurrentValueFor(sequence) : session.getNextValueFor(sequence, prepared);
     }
 
     @Override
     public TypeInfo getType() {
-        return TypeInfo.TYPE_LONG;
+        return sequence.getDataType();
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level, int state) {
-        // nothing to do
-    }
-
-    @Override
-    public Expression optimize(Session session) {
-        return this;
-    }
-
-    @Override
-    public void setEvaluatable(TableFilter tableFilter, boolean b) {
-        // nothing to do
-    }
-
-    @Override
-    public StringBuilder getSQL(StringBuilder builder, boolean alwaysQuote) {
-        builder.append("(NEXT VALUE FOR ");
-        return sequence.getSQL(builder, alwaysQuote).append(')');
-    }
-
-    @Override
-    public void updateAggregate(Session session, int stage) {
-        // nothing to do
+    public StringBuilder getUnenclosedSQL(StringBuilder builder, int sqlFlags) {
+        builder.append(current ? "CURRENT" : "NEXT").append(" VALUE FOR ");
+        return sequence.getSQL(builder, sqlFlags);
     }
 
     @Override
@@ -73,7 +75,6 @@ public class SequenceValue extends Expression {
         case ExpressionVisitor.GET_COLUMNS2:
             return true;
         case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.READONLY:
         case ExpressionVisitor.INDEPENDENT:
         case ExpressionVisitor.QUERY_COMPARABLE:
             return false;
@@ -83,19 +84,16 @@ public class SequenceValue extends Expression {
         case ExpressionVisitor.GET_DEPENDENCIES:
             visitor.addDependency(sequence);
             return true;
+        case ExpressionVisitor.READONLY:
+            return current;
         default:
-            throw DbException.throwInternalError("type="+visitor.getType());
+            throw DbException.getInternalError("type=" + visitor.getType());
         }
     }
 
     @Override
     public int getCost() {
         return 1;
-    }
-
-    @Override
-    public boolean isGeneratedKey() {
-        return true;
     }
 
 }

@@ -1,21 +1,26 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.build.doc;
 
 import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 
 import org.h2.tools.Server;
-import org.h2.util.IOUtils;
 import org.h2.util.StringUtils;
 
 /**
@@ -40,7 +45,13 @@ public class LinkChecker {
         "#tutorial_index"
     };
 
-    private final HashMap<String, String> targets = new HashMap<>();
+    private static enum TargetKind {
+        FILE, ID
+    }
+    private final HashMap<String, TargetKind> targets = new HashMap<>();
+    /**
+     * Map of source link (i.e. <a> tag) in the document, to the document path
+     */
     private final HashMap<String, String> links = new HashMap<>();
 
     /**
@@ -54,10 +65,10 @@ public class LinkChecker {
     }
 
     private void run(String... args) throws Exception {
-        String dir = "docs";
+        Path dir = Paths.get("docs");
         for (int i = 0; i < args.length; i++) {
             if ("-dir".equals(args[i])) {
-                dir = args[++i];
+                dir = Paths.get(args[++i]);
             }
         }
         process(dir);
@@ -126,8 +137,7 @@ public class LinkChecker {
     private void listBadLinks() throws Exception {
         ArrayList<String> errors = new ArrayList<>();
         for (String link : links.keySet()) {
-            if (!link.startsWith("http") && !link.endsWith("h2.pdf")
-                    && link.indexOf("_ja.") < 0) {
+            if (!link.startsWith("http") && !link.endsWith("h2.pdf")) {
                 if (targets.get(link) == null) {
                     errors.add(links.get(link) + ": Link missing " + link);
                 }
@@ -139,7 +149,7 @@ public class LinkChecker {
             }
         }
         for (String name : targets.keySet()) {
-            if (targets.get(name).equals("id")) {
+            if (targets.get(name) == TargetKind.ID) {
                 boolean ignore = false;
                 for (String to : IGNORE_MISSING_LINKS_TO) {
                     if (name.contains(to)) {
@@ -161,29 +171,32 @@ public class LinkChecker {
         }
     }
 
-    private void process(String path) throws Exception {
-        if (path.endsWith("/CVS") || path.endsWith("/.svn")) {
-            return;
-        }
-        File file = new File(path);
-        if (file.isDirectory()) {
-            for (String n : file.list()) {
-                process(path + "/" + n);
+    private void process(Path path) throws Exception {
+        Files.walkFileTree(path, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                processFile(file);
+                return FileVisitResult.CONTINUE;
             }
-        } else {
-            processFile(path);
-        }
+        });
     }
 
-    private void processFile(String path) throws Exception {
-        targets.put(path, "file");
-        String lower = StringUtils.toLowerEnglish(path);
+    /**
+     * Process a file.
+     *
+     * @param file the file
+     */
+    void processFile(Path file) throws IOException {
+        String path = file.toString();
+        targets.put(path, TargetKind.FILE);
+        String fileName = file.getFileName().toString();
+        String lower = StringUtils.toLowerEnglish(fileName);
         if (!lower.endsWith(".html") && !lower.endsWith(".htm")) {
             return;
         }
-        String fileName = new File(path).getName();
-        String parent = path.substring(0, path.lastIndexOf('/'));
-        String html = IOUtils.readStringAndClose(new FileReader(path), -1);
+        Path parent = file.getParent();
+        final String html = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+        // find all the target fragments in the document (those elements marked with id attribute)
         int idx = -1;
         while (true) {
             idx = html.indexOf(" id=\"", idx + 1);
@@ -197,9 +210,10 @@ public class LinkChecker {
             }
             String ref = html.substring(start, end);
             if (!ref.startsWith("_")) {
-                targets.put(path + "#" + ref, "id");
+                targets.put(path + "#" + ref, TargetKind.ID);
             }
         }
+        // find all the href links in the document
         idx = -1;
         while (true) {
             idx = html.indexOf(" href=\"", idx + 1);
@@ -226,19 +240,19 @@ public class LinkChecker {
             } else if (ref.startsWith("#")) {
                 ref = path + ref;
             } else {
-                String p = parent;
+                Path p = parent;
                 while (ref.startsWith(".")) {
                     if (ref.startsWith("./")) {
                         ref = ref.substring(2);
                     } else if (ref.startsWith("../")) {
                         ref = ref.substring(3);
-                        p = p.substring(0, p.lastIndexOf('/'));
+                        p = p.getParent();
                     }
                 }
-                ref = p + "/" + ref;
+                ref = p + File.separator + ref;
             }
             if (ref != null) {
-                links.put(ref, path);
+                links.put(ref.replace('/', File.separatorChar), path);
             }
         }
         idx = -1;
@@ -264,7 +278,7 @@ public class LinkChecker {
             if (type.equals("href")) {
                 // already checked
             } else if (type.equals("id")) {
-                targets.put(path + "#" + ref, "id");
+                targets.put(path + "#" + ref, TargetKind.ID);
             } else {
                 error(fileName, "Unsupported <a ?: " + html.substring(idx, idx + 100));
             }

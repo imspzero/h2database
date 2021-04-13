@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -18,7 +18,6 @@ import org.h2.api.ErrorCode;
 import org.h2.store.fs.FileUtils;
 import org.h2.test.TestBase;
 import org.h2.test.TestDb;
-import org.h2.value.DataType;
 
 /**
  * Tests the linked table feature (CREATE LINKED TABLE).
@@ -31,7 +30,7 @@ public class TestLinkedTable extends TestDb {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -53,6 +52,7 @@ public class TestLinkedTable extends TestDb {
         testCachingResults();
         testLinkedTableInReadOnlyDb();
         testGeometry();
+        testFetchSize();
         deleteDb("linkedTable");
     }
 
@@ -237,7 +237,7 @@ public class TestLinkedTable extends TestDb {
         assertSingleValue(sb, "SELECT * FROM T2", 2);
         sa.execute("DROP ALL OBJECTS");
         sb.execute("DROP ALL OBJECTS");
-        assertThrows(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, sa).
+        assertThrows(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_DATABASE_EMPTY_1, sa).
                 execute("SELECT * FROM TEST");
         ca.close();
         cb.close();
@@ -288,9 +288,9 @@ public class TestLinkedTable extends TestDb {
         sa.execute("CREATE TABLE GOOD (X NUMBER)");
         sa.execute("CREATE SCHEMA S");
         sa.execute("CREATE TABLE S.BAD (X NUMBER)");
-        sb.execute("CALL LINK_SCHEMA('G', '', " +
+        sb.execute("SELECT * FROM LINK_SCHEMA('G', '', " +
                 "'jdbc:h2:mem:one', 'sa', 'sa', 'PUBLIC'); ");
-        sb.execute("CALL LINK_SCHEMA('B', '', " +
+        sb.execute("SELECT * FROM LINK_SCHEMA('B', '', " +
                 "'jdbc:h2:mem:one', 'sa', 'sa', 'S'); ");
         // OK
         sb.executeQuery("SELECT * FROM G.GOOD");
@@ -428,7 +428,7 @@ public class TestLinkedTable extends TestDb {
 
         Connection conn2 = DriverManager.getConnection(url2, "sa2", "def def");
         Statement stat2 = conn2.createStatement();
-        String link = "CALL LINK_SCHEMA('LINKED', '', '" + url1 +
+        String link = "SELECT * FROM LINK_SCHEMA('LINKED', '', '" + url1 +
                 "', 'sa1', 'abc abc', 'PUBLIC')";
         stat2.execute(link);
         stat2.executeQuery("SELECT * FROM LINKED.TEST1");
@@ -459,7 +459,7 @@ public class TestLinkedTable extends TestDb {
         stat.execute("CREATE TEMP TABLE TEST_TEMP(ID INT PRIMARY KEY)");
         stat.execute("CREATE TABLE TEST(ID INT PRIMARY KEY, " +
                 "NAME VARCHAR(200), XT TINYINT, XD DECIMAL(10,2), " +
-                "XTS TIMESTAMP, XBY BINARY(255), XBO BIT, XSM SMALLINT, " +
+                "XTS TIMESTAMP, XBY VARBINARY(255), XBO BIT, XSM SMALLINT, " +
                 "XBI BIGINT, XBL BLOB, XDA DATE, XTI TIME, XCL CLOB, XDO DOUBLE)");
         stat.execute("CREATE INDEX IDXNAME ON TEST(NAME)");
         stat.execute("INSERT INTO TEST VALUES(0, NULL, NULL, NULL, NULL, " +
@@ -495,7 +495,7 @@ public class TestLinkedTable extends TestDb {
         testRow(stat, "LINK_TEST");
         ResultSet rs = stat.executeQuery("SELECT * FROM LINK_TEST");
         ResultSetMetaData meta = rs.getMetaData();
-        assertEquals(10, meta.getPrecision(1));
+        assertEquals(32, meta.getPrecision(1));
         assertEquals(200, meta.getPrecision(2));
 
         conn.close();
@@ -525,7 +525,7 @@ public class TestLinkedTable extends TestDb {
         rs = stat.executeQuery("SELECT * FROM " +
                 "INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='LINK_TEST'");
         rs.next();
-        assertEquals("TABLE LINK", rs.getString("TABLE_TYPE"));
+        assertEquals("TABLE LINK", rs.getString("STORAGE_TYPE"));
 
         rs.next();
         rs = stat.executeQuery("SELECT * FROM LINK_TEST WHERE ID=0");
@@ -576,7 +576,7 @@ public class TestLinkedTable extends TestDb {
         assertTrue(rs.getBoolean("XBO"));
         assertEquals(3000, rs.getShort("XSM"));
         assertEquals(1234567890123456789L, rs.getLong("XBI"));
-        assertEquals("1122aa", rs.getString("XBL"));
+        assertEquals(new byte[] {0x11, 0x22, (byte) 0xAA }, rs.getBytes("XBL"));
         assertEquals("0002-01-01", rs.getString("XDA"));
         assertEquals("00:00:00", rs.getString("XTI"));
         assertEquals("J\u00fcrg", rs.getString("XCL"));
@@ -697,9 +697,6 @@ public class TestLinkedTable extends TestDb {
         if (config.memory && config.mvStore) {
             return;
         }
-        if (DataType.GEOMETRY_CLASS == null) {
-            return;
-        }
         org.h2.Driver.load();
         Connection ca = DriverManager.getConnection("jdbc:h2:mem:one", "sa", "sa");
         Connection cb = DriverManager.getConnection("jdbc:h2:mem:two", "sa", "sa");
@@ -714,6 +711,33 @@ public class TestLinkedTable extends TestDb {
             assertTrue(rs.next());
             assertEquals("POINT (1 1)", rs.getString("THE_GEOM"));
         }
+        sb.execute("DROP TABLE T");
+        ca.close();
+        cb.close();
+    }
+
+    private void testFetchSize() throws SQLException {
+        if (config.memory) {
+            return;
+        }
+        org.h2.Driver.load();
+        Connection ca = DriverManager.getConnection("jdbc:h2:mem:one", "sa", "sa");
+        Connection cb = DriverManager.getConnection("jdbc:h2:mem:two", "sa", "sa");
+        Statement sa = ca.createStatement();
+        Statement sb = cb.createStatement();
+        sa.execute("DROP TABLE IF EXISTS TEST; "
+                + "CREATE TABLE TEST as select * from SYSTEM_RANGE(1,1000) as n;");
+        String sql = "CREATE LINKED TABLE T(NULL, " +
+                "'jdbc:h2:mem:one', 'sa', 'sa', 'TEST') FETCH_SIZE 10";
+        sb.execute(sql);
+        try (ResultSet rs = sb.executeQuery("SELECT count(*) FROM T")) {
+            assertTrue(rs.next());
+            assertEquals(1000, rs.getInt(1));
+        }
+        ResultSet res = sb.executeQuery("CALL DB_OBJECT_SQL('TABLE', 'PUBLIC', 'T')");
+        res.next();
+        assertEquals("CREATE FORCE LINKED TABLE \"PUBLIC\".\"T\"(NULL, 'jdbc:h2:mem:one', 'sa', 'sa', 'TEST')"
+                + " FETCH_SIZE 10 /*--hide--*/", res.getString(1));
         sb.execute("DROP TABLE T");
         ca.close();
         cb.close();

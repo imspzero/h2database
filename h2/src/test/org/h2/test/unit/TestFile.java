@@ -1,12 +1,11 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
 package org.h2.test.unit;
 
 import java.util.Random;
-import org.h2.api.JavaObjectSerializer;
 import org.h2.pagestore.db.LobStorageBackend;
 import org.h2.store.DataHandler;
 import org.h2.store.FileStore;
@@ -27,7 +26,7 @@ public class TestFile extends TestBase implements DataHandler {
      * @param a ignored
      */
     public static void main(String... a) throws Exception {
-        TestBase.createCaller().init().test();
+        TestBase.createCaller().init().testFromMain();
     }
 
     @Override
@@ -190,11 +189,6 @@ public class TestFile extends TestBase implements DataHandler {
     public int readLob(long lobId, byte[] hmac, long offset, byte[] buff,
             int off, int length) {
         return -1;
-    }
-
-    @Override
-    public JavaObjectSerializer getJavaObjectSerializer() {
-        return null;
     }
 
     @Override

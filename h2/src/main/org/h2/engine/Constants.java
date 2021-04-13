@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -15,22 +15,23 @@ public class Constants {
     /**
      * The build date is updated for each public release.
      */
-    public static final String BUILD_DATE = "2019-03-13";
+    public static final String BUILD_DATE = "2019-10-14";
 
     /**
      * The build date of the last stable release.
      */
-    public static final String BUILD_DATE_STABLE = "2018-03-18";
+    public static final String BUILD_DATE_STABLE = "2019-03-13";
 
     /**
-     * The build id is incremented for each public release.
+     * Sequential version number. Even numbers are used for official releases,
+     * odd numbers are used for development builds.
      */
-    public static final int BUILD_ID = 199;
+    public static final int BUILD_ID = 201;
 
     /**
      * The build id of the last stable release.
      */
-    public static final int BUILD_ID_STABLE = 197;
+    public static final int BUILD_ID_STABLE = 199;
 
     /**
      * Whether this is a snapshot version.
@@ -44,36 +45,6 @@ public class Constants {
      * Example: ACME_SVN1651_BUILD3
      */
     public static final String BUILD_VENDOR_AND_VERSION = null;
-
-    /**
-     * The TCP protocol version number 9.
-     * @since 1.3.158 (2011-07-17)
-     */
-    public static final int TCP_PROTOCOL_VERSION_9 = 9;
-
-    /**
-     * The TCP protocol version number 10.
-     * @since 1.3.162 (2011-11-26)
-     */
-    public static final int TCP_PROTOCOL_VERSION_10 = 10;
-
-    /**
-     * The TCP protocol version number 11.
-     * @since 1.3.163 (2011-12-30)
-     */
-    public static final int TCP_PROTOCOL_VERSION_11 = 11;
-
-    /**
-     * The TCP protocol version number 12.
-     * @since 1.3.168 (2012-07-13)
-     */
-    public static final int TCP_PROTOCOL_VERSION_12 = 12;
-
-    /**
-     * The TCP protocol version number 13.
-     * @since 1.3.174 (2013-10-19)
-     */
-    public static final int TCP_PROTOCOL_VERSION_13 = 13;
 
     /**
      * The TCP protocol version number 14.
@@ -106,24 +77,36 @@ public class Constants {
     public static final int TCP_PROTOCOL_VERSION_18 = 18;
 
     /**
+     * The TCP protocol version number 19.
+     * @since 1.4.200 (2019-10-14)
+     */
+    public static final int TCP_PROTOCOL_VERSION_19 = 19;
+
+    /**
+     * The TCP protocol version number 20.
+     * @since 2.0.202 (TODO)
+     */
+    public static final int TCP_PROTOCOL_VERSION_20 = 20;
+
+    /**
      * Minimum supported version of TCP protocol.
      */
-    public static final int TCP_PROTOCOL_VERSION_MIN_SUPPORTED = TCP_PROTOCOL_VERSION_9;
+    public static final int TCP_PROTOCOL_VERSION_MIN_SUPPORTED = TCP_PROTOCOL_VERSION_14;
 
     /**
      * Maximum supported version of TCP protocol.
      */
-    public static final int TCP_PROTOCOL_VERSION_MAX_SUPPORTED = TCP_PROTOCOL_VERSION_18;
+    public static final int TCP_PROTOCOL_VERSION_MAX_SUPPORTED = TCP_PROTOCOL_VERSION_20;
 
     /**
      * The major version of this database.
      */
-    public static final int VERSION_MAJOR = 1;
+    public static final int VERSION_MAJOR = 2;
 
     /**
      * The minor version of this database.
      */
-    public static final int VERSION_MINOR = 4;
+    public static final int VERSION_MINOR = 0;
 
     /**
      * The lock mode that means no locking is used at all.
@@ -164,6 +147,11 @@ public class Constants {
      * texts).
      */
     public static final int ALLOW_LITERALS_NUMBERS = 1;
+
+    /**
+     * SNAPSHOT isolation level of transaction.
+     */
+    public static final int TRANSACTION_SNAPSHOT = 6;
 
     /**
      * Whether searching in Blob values should be supported.
@@ -310,6 +298,32 @@ public class Constants {
     public static final int LOCK_SLEEP = 1000;
 
     /**
+     * The maximum allowed length of identifiers.
+     */
+    public static final int MAX_IDENTIFIER_LENGTH = 256;
+
+    /**
+     * The maximum number of columns in a table, select statement or row value.
+     */
+    public static final int MAX_COLUMNS = 16_384;
+
+    /**
+     * The maximum allowed length for character string, binary string, and other
+     * data types based on them; excluding LOB data types.
+     */
+    public static final int MAX_STRING_LENGTH = 1024 * 1024;
+
+    /**
+     * The maximum allowed precision of numeric data types.
+     */
+    public static final int MAX_NUMERIC_PRECISION = 100_000;
+
+    /**
+     * The maximum allowed cardinality of array.
+     */
+    public static final int MAX_ARRAY_CARDINALITY = 65_536;
+
+    /**
      * The highest possible parameter index.
      */
     public static final int MAX_PARAMETER_INDEX = 100_000;
@@ -335,23 +349,6 @@ public class Constants {
      * The memory needed by an array.
      */
     public static final int MEMORY_ARRAY = 24;
-
-    /**
-     * The memory needed by an object of class PageBtree.
-     */
-    public static final int MEMORY_PAGE_BTREE =
-            112 + MEMORY_DATA + 2 * MEMORY_OBJECT;
-
-    /**
-     * The memory needed by an object of class PageData.
-     */
-    public static final int MEMORY_PAGE_DATA =
-            144 + MEMORY_DATA + 3 * MEMORY_OBJECT;
-
-    /**
-     * The memory needed by an object of class PageDataOverflow.
-     */
-    public static final int MEMORY_PAGE_DATA_OVERFLOW = 96 + MEMORY_DATA;
 
     /**
      * The memory needed by a pointer.
@@ -417,6 +414,16 @@ public class Constants {
     public static final String SCHEMA_MAIN = "PUBLIC";
 
     /**
+     * The identity of pg_catalog schema.
+     */
+    public static final int PG_CATALOG_SCHEMA_ID = -1_000;
+
+    /**
+     * The name of the pg_catalog schema.
+     */
+    public static final String SCHEMA_PG_CATALOG = "PG_CATALOG";
+
+    /**
      * The default selectivity (used if the selectivity is not calculated).
      */
     public static final int SELECTIVITY_DEFAULT = 50;
@@ -452,17 +459,6 @@ public class Constants {
      * The file name suffix of all database files.
      */
     public static final String SUFFIX_DB_FILE = ".db";
-
-    /**
-     * The file name suffix of large object files.
-     */
-    public static final String SUFFIX_LOB_FILE = ".lob.db";
-
-    /**
-     * The suffix of the directory name used if LOB objects are stored in a
-     * directory.
-     */
-    public static final String SUFFIX_LOBS_DIRECTORY = ".lobs.db";
 
     /**
      * The file name suffix of file lock files that are used to make sure a
@@ -550,44 +546,37 @@ public class Constants {
      */
     public static final String PG_VERSION = "8.2.23";
 
-    private Constants() {
-        // utility class
-    }
+    /**
+     * The version of this product, consisting of major version, minor
+     * version, and build id.
+     */
+    public static final String VERSION;
 
     /**
-     * Get the version of this product, consisting of major version, minor
-     * version, and build id.
-     *
-     * @return the version number
+     * The last stable version name.
      */
-    public static String getVersion() {
-        String version = VERSION_MAJOR + "." + VERSION_MINOR + "." + BUILD_ID;
+    public static final String VERSION_STABLE = "1.4." + BUILD_ID_STABLE;
+
+    /**
+     * The complete version number of this database, consisting of
+     * the major version, the minor version, the build id, and the build date.
+     */
+    public static final String FULL_VERSION;
+
+    static {
+        String version = VERSION_MAJOR + "." + VERSION_MINOR + '.' + BUILD_ID;
         if (BUILD_VENDOR_AND_VERSION != null) {
-            version += "_" + BUILD_VENDOR_AND_VERSION;
+            version += '_' + BUILD_VENDOR_AND_VERSION;
         }
         if (BUILD_SNAPSHOT) {
             version += "-SNAPSHOT";
         }
-        return version;
+        VERSION = version;
+        FULL_VERSION = version + (" (" + BUILD_DATE + ')');
     }
 
-    /**
-     * Get the last stable version name.
-     *
-     * @return the version number
-     */
-    public static Object getVersionStable() {
-        return "1.4." + BUILD_ID_STABLE;
-    }
-
-    /**
-     * Get the complete version number of this database, consisting of
-     * the major version, the minor version, the build id, and the build date.
-     *
-     * @return the complete version
-     */
-    public static String getFullVersion() {
-        return getVersion() + " (" + BUILD_DATE + ")";
+    private Constants() {
+        // utility class
     }
 
 }

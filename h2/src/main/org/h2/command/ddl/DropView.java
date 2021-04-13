@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -10,8 +10,7 @@ import org.h2.api.ErrorCode;
 import org.h2.command.CommandInterface;
 import org.h2.constraint.ConstraintActionType;
 import org.h2.engine.DbObject;
-import org.h2.engine.Right;
-import org.h2.engine.Session;
+import org.h2.engine.SessionLocal;
 import org.h2.message.DbException;
 import org.h2.schema.Schema;
 import org.h2.table.Table;
@@ -28,7 +27,7 @@ public class DropView extends SchemaCommand {
     private boolean ifExists;
     private ConstraintActionType dropAction;
 
-    public DropView(Session session, Schema schema) {
+    public DropView(SessionLocal session, Schema schema) {
         super(session, schema);
         dropAction = session.getDatabase().getSettings().dropRestrict ?
                 ConstraintActionType.RESTRICT :
@@ -48,8 +47,7 @@ public class DropView extends SchemaCommand {
     }
 
     @Override
-    public int update() {
-        session.commit(true);
+    public long update() {
         Table view = getSchema().findTableOrView(session, viewName);
         if (view == null) {
             if (!ifExists) {
@@ -59,7 +57,7 @@ public class DropView extends SchemaCommand {
             if (TableType.VIEW != view.getTableType()) {
                 throw DbException.get(ErrorCode.VIEW_NOT_FOUND_1, viewName);
             }
-            session.getUser().checkRight(view, Right.ALL);
+            session.getUser().checkSchemaOwner(view.getSchema());
 
             if (dropAction == ConstraintActionType.RESTRICT) {
                 for (DbObject child : view.getChildren()) {

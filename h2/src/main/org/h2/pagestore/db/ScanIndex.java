@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2019 H2 Group. Multiple-Licensed under the MPL 2.0,
+ * Copyright 2004-2021 H2 Group. Multiple-Licensed under the MPL 2.0,
  * and the EPL 1.0 (https://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
@@ -8,11 +8,11 @@ package org.h2.pagestore.db;
 import java.util.ArrayList;
 
 import org.h2.api.ErrorCode;
-import org.h2.command.dml.AllColumnsForPlan;
+import org.h2.command.query.AllColumnsForPlan;
 import org.h2.engine.Constants;
-import org.h2.engine.Session;
-import org.h2.index.BaseIndex;
+import org.h2.engine.SessionLocal;
 import org.h2.index.Cursor;
+import org.h2.index.Index;
 import org.h2.index.IndexType;
 import org.h2.message.DbException;
 import org.h2.result.Row;
@@ -29,25 +29,24 @@ import org.h2.util.Utils;
  * of a table. Each regular table has one such object, even if no primary key or
  * indexes are defined.
  */
-public class ScanIndex extends BaseIndex {
+public class ScanIndex extends Index {
     private long firstFree = -1;
     private ArrayList<Row> rows = Utils.newSmallArrayList();
     private final PageStoreTable tableData;
     private long rowCount;
 
-    public ScanIndex(PageStoreTable table, int id, IndexColumn[] columns,
-            IndexType indexType) {
-        super(table, id, table.getName() + "_DATA", columns, indexType);
+    public ScanIndex(PageStoreTable table, int id, IndexColumn[] columns, IndexType indexType) {
+        super(table, id, table.getName() + "_DATA", columns, 0, indexType);
         tableData = table;
     }
 
     @Override
-    public void remove(Session session) {
+    public void remove(SessionLocal session) {
         truncate(session);
     }
 
     @Override
-    public void truncate(Session session) {
+    public void truncate(SessionLocal session) {
         rows = Utils.newSmallArrayList();
         firstFree = -1;
         if (tableData.getContainsLargeObject() && tableData.isPersistData()) {
@@ -63,17 +62,17 @@ public class ScanIndex extends BaseIndex {
     }
 
     @Override
-    public void close(Session session) {
+    public void close(SessionLocal session) {
         // nothing to do
     }
 
     @Override
-    public Row getRow(Session session, long key) {
+    public Row getRow(SessionLocal session, long key) {
         return rows.get((int) key);
     }
 
     @Override
-    public void add(Session session, Row row) {
+    public void add(SessionLocal session, Row row) {
         // in-memory
         if (firstFree == -1) {
             int key = rows.size();
@@ -86,19 +85,17 @@ public class ScanIndex extends BaseIndex {
             row.setKey(key);
             rows.set((int) key, row);
         }
-        row.setDeleted(false);
         rowCount++;
     }
 
     @Override
-    public void remove(Session session, Row row) {
+    public void remove(SessionLocal session, Row row) {
         // in-memory
         if (rowCount == 1) {
             rows = Utils.newSmallArrayList();
             firstFree = -1;
         } else {
-            Row free = session.createRow(null, 1);
-            free.setKey(firstFree);
+            Row free = new PageStoreRow.RemovedRow(firstFree);
             long key = row.getKey();
             if (rows.size() <= key) {
                 throw DbException.get(ErrorCode.ROW_NOT_FOUND_WHEN_DELETING_1,
@@ -111,19 +108,19 @@ public class ScanIndex extends BaseIndex {
     }
 
     @Override
-    public Cursor find(Session session, SearchRow first, SearchRow last) {
+    public Cursor find(SessionLocal session, SearchRow first, SearchRow last) {
         return new ScanCursor(this);
     }
 
     @Override
-    public double getCost(Session session, int[] masks,
+    public double getCost(SessionLocal session, int[] masks,
             TableFilter[] filters, int filter, SortOrder sortOrder,
             AllColumnsForPlan allColumnsSet) {
-        return tableData.getRowCountApproximation() + Constants.COST_ROW_OFFSET;
+        return tableData.getRowCountApproximation(session) + Constants.COST_ROW_OFFSET;
     }
 
     @Override
-    public long getRowCount(Session session) {
+    public long getRowCount(SessionLocal session) {
         return rowCount;
     }
 
@@ -146,7 +143,7 @@ public class ScanIndex extends BaseIndex {
                 return null;
             }
             row = rows.get((int) key);
-            if (!row.isEmpty()) {
+            if (row.getValueList() != null) {
                 return row;
             }
         }
@@ -174,28 +171,13 @@ public class ScanIndex extends BaseIndex {
     }
 
     @Override
-    public boolean canGetFirstOrLast() {
-        return false;
-    }
-
-    @Override
-    public Cursor findFirstOrLast(Session session, boolean first) {
-        throw DbException.getUnsupportedException("SCAN");
-    }
-
-    @Override
-    public long getRowCountApproximation() {
+    public long getRowCountApproximation(SessionLocal session) {
         return rowCount;
     }
 
     @Override
-    public long getDiskSpaceUsed() {
-        return 0;
-    }
-
-    @Override
     public String getPlanSQL() {
-        return table.getSQL(new StringBuilder(), false).append(".tableScan").toString();
+        return table.getSQL(new StringBuilder(), TRACE_SQL_FLAGS).append(".tableScan").toString();
     }
 
 }
